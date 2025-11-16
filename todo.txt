@@ -1,0 +1,102 @@
+A. Build the Agentic Retrieval Pipeline
+A1. Expand your data schema
+
+Update your PGN → JSONL converter to extract full metadata (event, site, date, player names, ELOs, result, ECO, moves).
+
+Confirm the JSONL output contains these fields for every game.
+
+Regenerate your dataset if needed.
+
+A2. Add metadata filtering
+
+Modify your /search request model to accept filter parameters (min_elo, eco, result, etc.).
+
+After vector search returns candidates, run them through a filtering function.
+
+Ensure filtering happens after FAISS retrieval, not before.
+
+Validate filters by creating a small test dataset and issuing controlled queries.
+
+A3. Add an LLM reasoning module
+
+Implement a function that takes the user query + retrieved games.
+
+Format the retrieved games as structured context (player names, ECO, moves).
+
+Write prompts that summarize, compare, and justify why games were retrieved.
+
+Integrate this reasoning step into the /search endpoint so the user gets:
+
+retrieved games
+
+an LLM-generated analysis
+
+This finishes the “agentic retrieval pipeline”.
+
+B. Add Explanation and Comparison Workflows
+B1. Game explanation endpoint
+
+Create an endpoint that accepts a single game object.
+
+Pass the game metadata + moves to an LLM with an explanation prompt.
+
+Return a structured, concise explanation.
+
+B2. Game comparison endpoint
+
+Create an endpoint that accepts N games.
+
+Format them into comparison context.
+
+Prompt the LLM to analyze recurring patterns, motifs, and similarities.
+
+Ensure the output covers openings, structures, and tactical themes.
+
+This fulfills the resume claim about “summary and recurring pattern identification”.
+
+C. Implement Streaming PGN Ingestion
+C1. Create a streaming PGN reader
+
+Turn your PGN parser into a generator that yields one game at a time.
+
+Ensure it does not load the entire PGN file into memory.
+
+C2. Add batched ingestion logic
+
+Buffer games in small batches (e.g., 128).
+
+For each batch:
+
+convert games to JSONL
+
+compute embeddings
+
+insert embeddings into FAISS
+
+Clear the batch and continue streaming.
+
+C3. Validate at scale
+
+Run ingestion on a 100k-game PGN file.
+
+Monitor memory usage and ingestion rate.
+
+Validate that FAISS index size grows as expected.
+
+This justifies the “processed and indexed 100k+ games” bullet.
+
+D. Combine Everything into an End-to-End Pipeline
+
+Ingest → embed → index (streaming).
+
+Search → vector retrieval.
+
+Filter → metadata filtering.
+
+Reason → LLM-based analysis.
+
+Additional tools → explanation + comparison endpoints.
+
+Test with diverse queries (themes, openings, patterns).
+
+Document the full pipeline architecture.

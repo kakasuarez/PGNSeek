@@ -1,0 +1,21 @@
+# Chess Game Retrieval Engine - Requirements
+# Production-grade dependencies for LLM-powered chess search
+
+# Core dependencies
+python-chess==1.999        # PGN parsing and chess move handling
+numpy==1.24.3              # Numerical operations
+tqdm==4.66.1               # Progress bars
+
+# Machine Learning & Embeddings
+sentence-transformers>=2.7.0  # Sentence embeddings (includes torch)
+faiss-cpu==1.7.4           # FAISS for similarity search (CPU version)
+# For GPU support, use: faiss-gpu==1.7.4
+huggingface_hub>=0.20.0    # HuggingFace model hub (required by sentence-transformers)
+
+# Web API
+fastapi==0.104.1           # Modern web framework
+uvicorn[standard]==0.24.0  # ASGI server
+pydantic==2.5.0            # Data validation
+
+# Optional: For better performance and monitoring
+# torch==2.1.0             # PyTorch (included with sentence-transformers)
