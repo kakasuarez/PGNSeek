@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import structlog
@@ -48,7 +48,18 @@ app = FastAPI(
 # ── Middleware ────────────────────────────────────────────────────────────────
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content=ErrorDetail(
+            error="rate_limit_exceeded",
+            message=f"Too many requests. Limit: {exc.detail}",
+            detail={"retry_after": "60s"},
+        ).model_dump(),
+    )
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)  # type: ignore[arg-type]
 
 app.add_middleware(
     CORSMiddleware,
