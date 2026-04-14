@@ -24,9 +24,7 @@ def configure_logging() -> None:
     ]
 
     if settings.LOG_FORMAT == "pretty":
-        processors = shared_processors + [
-            structlog.dev.ConsoleRenderer(colors=True)
-        ]
+        processors = shared_processors + [structlog.dev.ConsoleRenderer(colors=True)]
     else:
         processors = shared_processors + [
             structlog.processors.dict_tracebacks,
@@ -37,7 +35,8 @@ def configure_logging() -> None:
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        # add_logger_name requires stdlib logger objects (with .name)
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
 
