@@ -9,9 +9,8 @@ Responsibilities:
   3. For each file: parse games → compute features → bulk index to ES
 
 Design decisions:
-  - game_hash used as ES _id → reingestion is idempotent
-  - Synchronous (no Celery) for MVP — upgrade path is clean:
-      each file becomes a Celery task, this function becomes the task body
+  - game_hash used as ES _id -> reingestion is idempotent
+  - Synchronous (no Celery) for MVP
   - Batch size controlled by ES_BULK_BATCH_SIZE env var
   - Games before MIN_YEAR are skipped at parse time
 """
@@ -60,16 +59,45 @@ def material_balance(board: chess.Board) -> float:
     return score
 
 
+def side_material(board: chess.Board, color: chess.Color) -> float:
+    """Total non-king material for one side (used for endgame classification)."""
+    return sum(
+        len(board.pieces(pt, color)) * val
+        for pt, val in PIECE_VALUES.items()
+        if pt != chess.KING
+    )
+
+
+def classify_endgame_type(board: chess.Board) -> str:
+    """
+    Called at the moment the endgame threshold is crossed.
+    Classifies by the heaviest piece still on the board (either side).
+    Handles queen endgames correctly -- a lone queen IS an endgame.
+    """
+    if board.pieces(chess.QUEEN, chess.WHITE) or board.pieces(chess.QUEEN, chess.BLACK):
+        return "queen"
+    if board.pieces(chess.ROOK, chess.WHITE) or board.pieces(chess.ROOK, chess.BLACK):
+        return "rook"
+    if (board.pieces(chess.BISHOP, chess.WHITE) or board.pieces(chess.BISHOP, chess.BLACK)
+            or board.pieces(chess.KNIGHT, chess.WHITE) or board.pieces(chess.KNIGHT, chess.BLACK)):
+        return "minor_piece"
+    return "pawn"
+
+
 def compute_features(game: chess.pgn.Game) -> dict:
     board = game.board()
     balances: list[float] = []
-    prev_bal = 0.0
-    sacrifices = 0
     pawn_captures = 0
     endgame_move = -1
+    endgame_type = "none"
+
+    # ENDGAME THRESHOLD: both sides at or below 13 non-king points.
+    # 13 covers: Q alone (9), R+minor (8), R+2P (7), etc.
+    # This correctly classifies queen endgames, rook endgames, pawn endgames.
+    # The old "queens gone + piece count <= 12" was wrong on both counts.
+    ENDGAME_MATERIAL_THRESHOLD = 13
 
     for move_num, move in enumerate(game.mainline_moves(), start=1):
-        # Check for pawn captures before pushing the move
         if board.is_capture(move) and board.piece_type_at(move.from_square) == chess.PAWN:
             pawn_captures += 1
 
@@ -77,25 +105,36 @@ def compute_features(game: chess.pgn.Game) -> dict:
         bal = material_balance(board)
         balances.append(bal)
 
-        swing = abs(bal - prev_bal)
-        if swing >= settings.SACRIFICE_DELTA:
-            sacrifices += 1
-
-        prev_bal = bal
-
-        # Endgame detection: first move where queens are gone + few pieces remain
         if endgame_move == -1:
-            total_pieces = sum(
-                len(board.pieces(pt, color))
-                for pt in PIECE_VALUES
-                for color in [chess.WHITE, chess.BLACK]
-            )
-            queens_gone = (
-                not board.pieces(chess.QUEEN, chess.WHITE) and
-                not board.pieces(chess.QUEEN, chess.BLACK)
-            )
-            if queens_gone and total_pieces <= settings.ENDGAME_MAX_PIECES:
+            w_mat = side_material(board, chess.WHITE)
+            b_mat = side_material(board, chess.BLACK)
+            if w_mat <= ENDGAME_MATERIAL_THRESHOLD and b_mat <= ENDGAME_MATERIAL_THRESHOLD:
                 endgame_move = move_num
+                endgame_type = classify_endgame_type(board)
+
+    # -- Sacrifice detection ---------------------------------------------------
+    # Fix: after any large swing, check whether the balance RECOVERED
+    # to near its pre-swing level within RECOVERY_WINDOW moves.
+    # Recovery = trade. No recovery = genuine sacrifice.
+    sacrifices = 0
+    SAC_DELTA = float(settings.SACRIFICE_DELTA)   # default 3.0 -- knight/bishop threshold
+    RECOVERY_WINDOW = 2                            # half-moves to wait for recapture
+    RECOVERY_TOLERANCE = 1.0                       # a pawn of slippage is noise
+
+    for i in range(len(balances) - 1):
+        pre_swing_bal = balances[i - 1] if i > 0 else 0.0
+        immediate_swing = abs(balances[i] - pre_swing_bal)
+
+        if immediate_swing < SAC_DELTA:
+            continue  # not a significant material event
+
+        future_idx = min(i + RECOVERY_WINDOW, len(balances) - 1)
+        future_bal = balances[future_idx]
+
+        # Did balance return to within RECOVERY_TOLERANCE of pre-capture level?
+        recovered = abs(future_bal - pre_swing_bal) <= RECOVERY_TOLERANCE
+        if not recovered:
+            sacrifices += 1
 
     swings = [abs(balances[i] - balances[i - 1]) for i in range(1, len(balances))]
     avg_swing = sum(swings) / len(swings) if swings else 0.0
@@ -108,6 +147,7 @@ def compute_features(game: chess.pgn.Game) -> dict:
         "piece_sacrifices":       sacrifices,
         "entered_endgame":        endgame_move > 0,
         "endgame_move":           endgame_move,
+        "endgame_type":           endgame_type,
         "pawn_structure_changes": pawn_captures,
     }
 
@@ -141,10 +181,9 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
 
     eco = h.get("ECO", None)
     eco_prefix = eco[0] if eco else None
-
     features = compute_features(game)
 
-    doc = {
+    return {
         "game_hash":    game_hash,
         "white":        h.get("White", "?"),
         "black":        h.get("Black", "?"),
@@ -162,16 +201,15 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
         "source_file":  source_file,
         **features,
     }
-    return doc
 
 
-# ── Bulk indexing ─────────────────────────────────────────────────────────────
+# -- Bulk indexing -------------------------------------------------------------
 
 def iter_bulk_actions(documents: list[dict]) -> Generator[dict, None, None]:
     for doc in documents:
         yield {
             "_index": ALIAS_NAME,
-            "_id":    doc["game_hash"],   # idempotent upsert
+            "_id":    doc["game_hash"],
             "_source": doc,
         }
 

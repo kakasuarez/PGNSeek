@@ -103,6 +103,7 @@ INDEX_MAPPING = {
             "piece_sacrifices":      {"type": "integer"}, # count of moves with swing >= SACRIFICE_DELTA
             "entered_endgame":       {"type": "boolean"}, # queens off + <= ENDGAME_MAX_PIECES total
             "endgame_move":          {"type": "integer"}, # which move the endgame started (-1 if no endgame)
+            "endgame_type":          {"type": "keyword"}, # "queen" | "rook" | "minor_piece" | "pawn" | "none"
             "pawn_structure_changes":{"type": "integer"}, # pawn captures (proxy for structural play)
 
             # ── Source metadata ────────────────────────────────────────────

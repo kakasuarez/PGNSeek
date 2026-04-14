@@ -110,6 +110,7 @@ This document is the authoritative record of every significant design decision m
 | `piece_sacrifices` | integer | Count of moves where material swing ≥ `SACRIFICE_DELTA` (default: 3 points) |
 | `entered_endgame` | boolean | True if queens left the board and total pieces ≤ `ENDGAME_MAX_PIECES` (default: 12) |
 | `endgame_move` | integer | Move number when endgame started. -1 if no endgame detected |
+| `endgame_type` | keyword | Which piece endgame it is. |
 | `pawn_structure_changes` | integer | Count of pawn captures — proxy for pawn structure complexity |
 
 **Tuning:** All thresholds (`SACRIFICE_DELTA`, `ENDGAME_MAX_PIECES`, `AGGRESSION_THRESHOLD`) are environment variables in `.env`. They can be adjusted without code changes, but reindexing is required to apply new values to existing documents.
