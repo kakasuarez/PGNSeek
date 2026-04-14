@@ -44,7 +44,7 @@ def build_search_request(
     return ESSearchRequest(
         query={"match_all": {}},
         aggs={},
-        sort=[{"avg_rating": "desc"}, {"_id": "asc"}],
+        sort=[{"avg_rating": "desc"}, {"game_hash": "asc"}],
         search_after=None,
         size=page_size,
         source_fields=[
