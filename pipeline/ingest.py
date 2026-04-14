@@ -16,8 +16,12 @@ import sys
 import argparse
 from pathlib import Path
 
-# Allow importing from backend/app/
-sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
+# Ensure backend/ is on the path so `app` resolves correctly when running
+# this script directly (e.g. `python pipeline/ingest.py` from repo root).
+# pyrightconfig.json handles the same for VS Code / Pylance.
+_backend = Path(__file__).parent.parent / "backend"
+if str(_backend) not in sys.path:
+    sys.path.insert(0, str(_backend))
 
 from app.config import settings
 from app.logging_config import configure_logging
