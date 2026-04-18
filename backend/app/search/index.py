@@ -95,6 +95,7 @@ INDEX_MAPPING = {
             # ── Game structure ─────────────────────────────────────────────
             "num_moves":          {"type": "integer"},
             "opening_moves":      {"type": "integer"},  # moves until out of opening book
+            "pgn_moves": {"type": "text", "index": "false"}, # do not index the individual moves to save space
 
             # ── Computed chess features ────────────────────────────────────
             # These are computed once at index time. All queries are just numeric comparisons.

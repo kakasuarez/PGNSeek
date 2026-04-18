@@ -387,5 +387,6 @@ These are explicitly not decided yet. They are recorded here so they are not for
 
 | Date | Section | Change | Reason |
 |---|---|---|---|
+| 2026-04-18 | Index | Add PGN moves | Debugging and final result |
 | 2026-04-14 | Index | Add endgame type | Improve endgame detection |
 | 2026-04-05 | All | Initial document created | Project kickoff |

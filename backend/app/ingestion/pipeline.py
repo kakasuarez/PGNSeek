@@ -199,6 +199,7 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
         "event":        h.get("Event", None),
         "site":         h.get("Site", None),
         "source_file":  source_file,
+        "pgn_moves": " ".join(str(m) for m in game.mainline_moves()),
         **features,
     }
 
