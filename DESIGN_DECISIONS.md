@@ -2,7 +2,7 @@
 
 **Project:** PGNSeek — natural language search across millions of chess games  
 **Status:** Active  
-**Last updated:** 2026-04-05  
+**Last updated:** 2026-04-18
 
 This document is the authoritative record of every significant design decision made during the project. Before changing anything recorded here, update this document first and note the reason. Each decision includes the context, the choice made, the alternatives considered, and the consequences of changing it later.
 
