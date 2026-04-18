@@ -36,6 +36,9 @@ PIECE_VALUES = {
     chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 0,
 }
 
+eco_to_opening = {}
+with open(settings.ECO_TO_OPENING_FILE, "r") as f:
+    eco_to_opening.update(json.load(f))
 
 # ── Game hash ─────────────────────────────────────────────────────────────────
 
@@ -195,7 +198,7 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
         "year":         year,
         "eco":          eco,
         "eco_prefix":   eco_prefix,
-        "opening_name": h.get("Opening", None),
+        "opening_name": eco_to_opening[eco],
         "event":        h.get("Event", None),
         "site":         h.get("Site", None),
         "source_file":  source_file,

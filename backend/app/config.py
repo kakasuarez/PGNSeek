@@ -21,7 +21,8 @@ class Settings(BaseSettings):
 
     # Ingestion
     PGN_DATA_DIR: str = "./data/pgn"
-    INGESTION_STATE_FILE: str = "./data/ingestion_state.json"
+    INGESTION_STATE_FILE: str = "./data/json/ingestion_state.json"
+    ECO_TO_OPENING_FILE: str = "./data/json/eco_to_opening.json"
     MIN_YEAR: int = 2010
 
     # Feature extraction thresholds
