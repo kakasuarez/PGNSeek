@@ -215,4 +215,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-data/
+data/pgn
+data/zip
+data/json/ingestion_state.json
