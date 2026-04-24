@@ -4,22 +4,22 @@ app/ingestion/pipeline.py
 PGN ingestion pipeline. CLI entry point: pipeline/ingest.py
 
 Responsibilities:
-  1. Find all PGN files in PGN_DATA_DIR
-  2. Resume interrupted files using byte-offset checkpointing
-  3. Skip fully completed files
-  4. For each file: parse games -> compute features -> bulk index to ES
+    1. Find all PGN files in PGN_DATA_DIR
+    2. Resume interrupted files using byte-offset checkpointing
+    3. Skip fully completed files
+    4. For each file: parse games -> compute features -> bulk index to ES
 
 State schema (ingestion_state.json):
-  {
+    {
     "completed": ["file_a.pgn"],
     "in_progress": {
-      "file_b.pgn": {
+        "file_b.pgn": {
         "byte_offset": 1073741824,
         "games_indexed": 847500,
         "last_updated": "2026-04-18T09:39:02Z"
-      }
+        }
     }
-  }
+    }
 
 Resume mechanism: f.seek(byte_offset) jumps directly to the start of the
 next unread game. State is written after every bulk flush, so on crash
@@ -53,6 +53,9 @@ PIECE_VALUES = {
     chess.KING: 0,
 }
 
+eco_to_opening = {}
+with open(settings.ECO_TO_OPENING_FILE, "r") as f:
+    eco_to_opening.update(json.load(f))
 
 # -- Game hash -----------------------------------------------------------------
 
@@ -209,7 +212,7 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
         "year": year,
         "eco": eco,
         "eco_prefix": eco_prefix,
-        "opening_name": h.get("Opening", None),
+        "opening_name": eco_to_opening[eco],
         "event": h.get("Event", None),
         "site": h.get("Site", None),
         "source_file": source_file,
