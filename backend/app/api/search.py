@@ -4,6 +4,7 @@ app/api/search.py
 Search endpoint. Two routes:
   GET /api/v1/search   — main search with query string + optional filters
   GET /api/v1/games/{game_hash}  — retrieve a single game by hash
+  GET /api/v1/similar/{game_hash} — find similar games
 
 The query string is processed by the three-stage pipeline in app/search/query.py.
 """
@@ -17,7 +18,7 @@ import structlog
 from app.config import settings
 from app.models.schemas import SearchResponse, ErrorDetail
 from app.search.query import build_search_request
-from app.search.executor import execute_search, get_game_by_hash
+from app.search.executor import execute_search, get_game_by_hash, build_similarity_query
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -52,7 +53,9 @@ async def search(
         description="Pagination cursor from previous response (opaque token)",
     ),
 ):
-    log.info("search_request", query=q, page_size=page_size, has_cursor=cursor is not None)
+    log.info(
+        "search_request", query=q, page_size=page_size, has_cursor=cursor is not None
+    )
 
     try:
         es_request = build_search_request(q, page_size=page_size, cursor=cursor)
@@ -70,7 +73,9 @@ async def search(
     es = request.app.state.es
     response = await execute_search(es, es_request)
 
-    log.info("search_complete", query=q, total=response.total, returned=len(response.results))
+    log.info(
+        "search_complete", query=q, total=response.total, returned=len(response.results)
+    )
     return response
 
 
@@ -84,3 +89,13 @@ async def get_game(request: Request, game_hash: str):
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     return game
+
+
+@router.get("/games/similar/{game_hash}", summary="Get similar games from its hash")
+@limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
+def find_similar(request: Request, game_hash: str):
+    es = request.app.state.es
+    results = build_similarity_query(es, game_hash)
+    if not results:
+        raise HTTPException(status_code=404, detail="No similar games found")
+    return results

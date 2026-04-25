@@ -106,6 +106,12 @@ INDEX_MAPPING = {
             "endgame_move":          {"type": "integer"}, # which move the endgame started (-1 if no endgame)
             "endgame_type":          {"type": "keyword"}, # "queen" | "rook" | "minor_piece" | "pawn" | "none"
             "pawn_structure_changes":{"type": "integer"}, # pawn captures (proxy for structural play)
+            "feature_vector": {
+                "type": "dense_vector",
+                "dims": 6,
+                "index": True,
+                "similarity": "cosine"
+            },
 
             # ── Source metadata ────────────────────────────────────────────
             "source_file":   {"type": "keyword"},  # which PGN file this game came from

@@ -173,6 +173,20 @@ def compute_features(game: chess.pgn.Game) -> dict:
 
 
 # -- Document builder ----------------------------------------------------------
+def build_feature_vector(doc: dict) -> list[float]:
+    """
+    Normalized feature vector for similarity search.
+    All values scaled to approximately [0, 1].
+    Order must not change after first indexing.
+    """
+    return [
+        min(1.0, (doc.get("average_material_swings") or 0) / 8.0),
+        min(1.0, (doc.get("piece_sacrifices") or 0) / 6.0),
+        1.0 if doc.get("entered_endgame") else 0.0,
+        min(1.0, (doc.get("num_moves") or 0) / 120.0),
+        min(1.0, (doc.get("avg_rating") or 2000) / 3000.0),
+        min(1.0, (doc.get("pawn_structure_changes") or 0) / 15.0),
+    ]
 
 
 def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
@@ -329,6 +343,7 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
             if doc is None:
                 skipped += 1
                 continue
+            doc["feature_vector"] = build_feature_vector(doc)
 
             batch.append(doc)
 

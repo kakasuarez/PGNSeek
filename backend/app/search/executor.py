@@ -18,8 +18,11 @@ import structlog
 from app.config import settings
 from app.search.query import ESSearchRequest
 from app.models.schemas import (
-    SearchResponse, GameResult, Aggregations,
-    BucketCount, QueryDebug,
+    SearchResponse,
+    GameResult,
+    Aggregations,
+    BucketCount,
+    QueryDebug,
 )
 
 log = structlog.get_logger()
@@ -35,9 +38,9 @@ def _decode_cursor(cursor: str) -> list:
 
 async def execute_search(es: Elasticsearch, req: ESSearchRequest) -> SearchResponse:
     body: dict = {
-        "query":   req.query,
-        "sort":    req.sort,
-        "size":    req.size,
+        "query": req.query,
+        "sort": req.sort,
+        "size": req.size,
         "_source": req.source_fields,
     }
 
@@ -105,3 +108,35 @@ def _buckets(raw_aggs: dict, key: str) -> list[BucketCount]:
         BucketCount(key=str(b["key"]), count=b["doc_count"])
         for b in raw_aggs[key].get("buckets", [])
     ]
+
+
+def build_similarity_query(es: Elasticsearch, game_hash: str, size: int = 10) -> list:
+    source = es.get(index=settings.ES_INDEX_ALIAS, id=game_hash)["_source"]
+    query_vector = source.get("feature_vector")
+    if not query_vector:
+        return []
+    response = es.search(
+        index=settings.ES_INDEX_ALIAS,
+        body={
+            "knn": {
+                "field": "feature_vector",
+                "query_vector": query_vector,
+                "k": size,
+                "num_candidates": size * 10,
+                "filter": {"bool": {"must_not": {"term": {"game_hash": game_hash}}}},
+            },
+            "_source": [
+                "white",
+                "black",
+                "opening_name",
+                "result",
+                "avg_rating",
+                "avg_material_swings",
+                "piece_sacrifices",
+                "game_hash",
+                "pgn_moves",
+            ],
+        },
+    )
+
+    return [hit["_source"] for hit in response["hits"]["hits"]]
