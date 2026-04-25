@@ -218,3 +218,4 @@ __marimo__/
 data/pgn
 data/zip
 data/json/ingestion_state.json
+debug/
