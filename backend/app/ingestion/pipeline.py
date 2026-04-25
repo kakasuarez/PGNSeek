@@ -139,22 +139,79 @@ def compute_features(game: chess.pgn.Game) -> dict:
                 endgame_move = move_num
                 endgame_type = classify_endgame_type(board)
 
-    # Sacrifice detection: a trade recovers within RECOVERY_WINDOW moves.
-    # A genuine sacrifice does not.
-    sacrifices = 0
-    SAC_DELTA = float(settings.SACRIFICE_DELTA)
-    RECOVERY_WINDOW = 2
-    RECOVERY_TOLERANCE = 1.0
+    # ── Sacrifice detection ───────────────────────────────────────────────────
+    #
+    # The naive per-move swing approach has one root cause of failure:
+    # `pre_swing_bal` (balance one move ago) may itself already reflect
+    # an unresolved prior capture, making normal recaptures and play in
+    # unequal positions look like sacrifices.
+    #
+    # Fix: track exchange sequences as a unit.
+    # An "exchange sequence" is a run of consecutive half-moves where each
+    # move changes the material balance by >= SAC_DELTA (captures/recaptures
+    # happening back-to-back). We find the STABLE balance before the sequence
+    # starts and the STABLE balance after it ends, then compare those two.
+    # If the net change across the whole sequence is >= SAC_DELTA and
+    # persists for QUIET_MOVES_REQUIRED non-capturing moves afterward,
+    # it is a genuine sacrifice.
+    #
+    # This correctly handles:
+    #   - Simple trades (Nxd5 exd5): net = 0, not a sacrifice ✓
+    #   - Zwischenzug sequences (Nxd5 Qh5+ exd5): still net 0, not a sacrifice ✓
+    #   - Exchange sacrifices (Rxf6 gxf6): net = -2, persists → sacrifice ✓
+    #   - Play in already-unequal positions: pre-sequence balance is already
+    #     negative; a further loss with no recovery is caught; a recapture
+    #     that restores parity within the sequence is not counted ✓
 
-    for i in range(len(balances) - 1):
-        pre_swing_bal = balances[i - 1] if i > 0 else 0.0
-        immediate_swing = abs(balances[i] - pre_swing_bal)
-        if immediate_swing < SAC_DELTA:
+    sacrifices = 0
+    SAC_DELTA = float(3)  # default 3.0
+    QUIET_MOVES_REQUIRED = 3
+    QUIET_TOLERANCE = 1.0  # a pawn of noise is acceptable
+
+    n = len(balances)
+    i = 0
+    while i < n:
+        # Find the start of a large swing
+        prev = balances[i - 1] if i > 0 else 0.0
+        curr = balances[i]
+        if abs(curr - prev) < SAC_DELTA:
+            i += 1
             continue
-        future_idx = min(i + RECOVERY_WINDOW, len(balances) - 1)
-        recovered = abs(balances[future_idx] - pre_swing_bal) <= RECOVERY_TOLERANCE
-        if not recovered:
-            sacrifices += 1
+
+        # We're at the start of an exchange sequence.
+        # Record the stable balance BEFORE this sequence began.
+        stable_before = prev
+
+        # Walk forward consuming the entire exchange sequence:
+        # keep advancing while consecutive moves also show large swings
+        # (back-and-forth captures). Stop when we reach a quiet move.
+        seq_end = i
+        while seq_end + 1 < n:
+            next_swing = abs(balances[seq_end + 1] - balances[seq_end])
+            if next_swing >= SAC_DELTA:
+                seq_end += 1  # still in the exchange sequence
+            else:
+                break
+
+        # Balance immediately after the sequence ends
+        balance_after_seq = balances[seq_end]
+        net_change = balance_after_seq - stable_before
+
+        # A genuine sacrifice: net material loss that is large enough
+        if abs(net_change) >= SAC_DELTA:
+            # Verify it persists: look QUIET_MOVES_REQUIRED moves past the
+            # sequence. If the balance is still far from stable_before,
+            # the loss was not recovered by a quiet recapture or tactic.
+            check_idx = min(seq_end + QUIET_MOVES_REQUIRED, n - 1)
+            persists = (
+                abs(balances[check_idx] - stable_before) >= SAC_DELTA - QUIET_TOLERANCE
+            )
+
+            if persists:
+                sacrifices += 1
+
+        # Skip past the whole sequence — don't re-examine its interior moves
+        i = seq_end + 1
 
     swings = [abs(balances[i] - balances[i - 1]) for i in range(1, len(balances))]
     avg_swing = sum(swings) / len(swings) if swings else 0.0
@@ -170,7 +227,6 @@ def compute_features(game: chess.pgn.Game) -> dict:
         "endgame_type": endgame_type,
         "pawn_structure_changes": pawn_captures,
     }
-
 
 # -- Document builder ----------------------------------------------------------
 def build_feature_vector(doc: dict) -> list[float]:
