@@ -108,7 +108,7 @@ INDEX_MAPPING = {
             "pawn_structure_changes":{"type": "integer"}, # pawn captures (proxy for structural play)
             "feature_vector": {
                 "type": "dense_vector",
-                "dims": 6,
+                "dims": 19,
                 "index": True,
                 "similarity": "cosine"
             },

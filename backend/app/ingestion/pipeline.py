@@ -228,21 +228,52 @@ def compute_features(game: chess.pgn.Game) -> dict:
         "pawn_structure_changes": pawn_captures,
     }
 
+
 # -- Document builder ----------------------------------------------------------
+ENDGAME_TYPES = ["none", "queen", "rook", "minor_piece", "pawn"]
+ECO_PREFIXES = ["A", "B", "C", "D", "E"]
+
+
 def build_feature_vector(doc: dict) -> list[float]:
-    """
-    Normalized feature vector for similarity search.
-    All values scaled to approximately [0, 1].
-    Order must not change after first indexing.
-    """
-    return [
-        min(1.0, (doc.get("average_material_swings") or 0) / 8.0),
-        min(1.0, (doc.get("piece_sacrifices") or 0) / 6.0),
-        1.0 if doc.get("entered_endgame") else 0.0,
-        min(1.0, (doc.get("num_moves") or 0) / 120.0),
-        min(1.0, (doc.get("avg_rating") or 2000) / 3000.0),
-        min(1.0, (doc.get("pawn_structure_changes") or 0) / 15.0),
+    total_half_moves = doc.get("num_moves") or 1
+    endgame_start = doc.get("endgame_move") or -1
+    endgame_type = doc.get("endgame_type") or "none"
+    result = doc.get("result") or ""
+    eco = (doc.get("eco") or "")[:1].upper()
+
+    endgame_proportion = (
+        (total_half_moves - endgame_start) / total_half_moves
+        if endgame_start > 0
+        else 0.0
+    )
+
+    # Scalar features (6 dimensions)
+    scalars = [
+        min((doc.get("avg_material_swings") or 0) / 8.0, 1.0),
+        min((doc.get("piece_sacrifices") or 0) / 6.0, 1.0),
+        min((doc.get("avg_rating") or 2000) / 3000.0, 1.0),
+        min(total_half_moves / 2 / 60.0, 1.0),  # full moves, cap at 60
+        min((doc.get("pawn_structure_changes") or 0) / 15.0, 1.0),
+        round(endgame_proportion, 3),
     ]
+
+    # Endgame type — one-hot (5 dimensions)
+    endgame_vec = [1.0 if endgame_type == t else 0.0 for t in ENDGAME_TYPES]
+
+    # Result — one-hot at half weight (3 dimensions)
+    result_vec = [
+        0.5 if result == "1-0" else 0.0,
+        0.5 if result == "0-1" else 0.0,
+        0.5 if result == "1/2-1/2" else 0.0,
+    ]
+
+    # ECO prefix — one-hot (5 dimensions)
+    eco_vec = [1.0 if eco == p else 0.0 for p in ECO_PREFIXES]
+
+    # entered_endgame is now implicit in endgame_proportion (0.0 = no endgame)
+    # so we don't need a separate boolean dimension
+
+    return scalars + endgame_vec + result_vec + eco_vec  # 6+5+3+5 = 19 dims
 
 
 def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
