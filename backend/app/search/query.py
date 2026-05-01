@@ -22,6 +22,37 @@ PATTERNS = {
     "moves_max": r"\bunder\s+(\d+)\s+moves?\b",
 }
 
+PLAYER_RESULT_PATTERN = re.compile(
+    r"\b(?P<name>[A-Za-z][a-zA-Z]*(?:\s[A-Z][a-zA-Z]*)?)\s+"
+    r"(?P<outcome>wins?|won|loses?|lost|draws?|drew)"
+    r"(?:\s+as\s+(?P<color>white|black))?",
+    re.IGNORECASE,
+)
+COLOR_EXCLUDED = {"white", "black"}
+
+
+def _normalise_outcome(word: str) -> str:
+    w = word.lower()
+    if w in {"wins", "win", "won"}:
+        return "win"
+    if w in {"loses", "lose", "lost"}:
+        return "loss"
+    return "draw"
+
+
+def extract_player_result(query: str) -> dict | None:
+    m = PLAYER_RESULT_PATTERN.search(query)
+    if not m:
+        return None
+    name = m.group("name").strip()
+    if name.lower() in COLOR_EXCLUDED:
+        return None
+    return {
+        "player": name,
+        "outcome": _normalise_outcome(m.group("outcome")),
+        "color": (m.group("color") or "").lower() or None,
+    }
+
 
 def extract_patterns(query: str) -> dict:
     tokens = {}
@@ -62,6 +93,9 @@ def extract_keywords(query: str) -> dict:
     for style, aliases in STYLES.items():
         if any(alias in q for alias in aliases):
             tokens.setdefault("styles", []).append(style)
+    pr = extract_player_result(query)  # use original case, not q
+    if pr:
+        tokens["player_result"] = pr
     return tokens
 
 
@@ -116,6 +150,64 @@ def resolve_intent(tokens: dict) -> dict:
 
     # if "year" in tokens:
     # filters.append({"term": {"year": int(tokens["year"][0])}})
+    if "player_result" in tokens:
+        pr = tokens["player_result"]
+        player = pr["player"]
+        outcome = pr["outcome"]
+        color = pr["color"]  # "white" | "black" | None
+
+        RESULT_FOR = {
+            "win": {"white": "1-0", "black": "0-1"},
+            "loss": {"white": "0-1", "black": "1-0"},
+            "draw": {"white": "1/2-1/2", "black": "1/2-1/2"},
+        }
+
+        if color:
+            result_val = RESULT_FOR[outcome][color]
+            must.append({"match": {color: {"query": player, "fuzziness": "AUTO"}}})
+            filters.append({"term": {"result": result_val}})
+        else:
+            white_result = RESULT_FOR[outcome]["white"]
+            black_result = RESULT_FOR[outcome]["black"]
+            must.append(
+                {
+                    "bool": {
+                        "minimum_should_match": 1,
+                        "should": [
+                            {
+                                "bool": {
+                                    "must": [
+                                        {
+                                            "match": {
+                                                "white": {
+                                                    "query": player,
+                                                    "fuzziness": "AUTO",
+                                                }
+                                            }
+                                        },
+                                        {"term": {"result": white_result}},
+                                    ]
+                                }
+                            },
+                            {
+                                "bool": {
+                                    "must": [
+                                        {
+                                            "match": {
+                                                "black": {
+                                                    "query": player,
+                                                    "fuzziness": "AUTO",
+                                                }
+                                            }
+                                        },
+                                        {"term": {"result": black_result}},
+                                    ]
+                                }
+                            },
+                        ],
+                    }
+                }
+            )
 
     return {"must": must, "should": should, "filter": filters, "must_not": must_not}
 
@@ -164,10 +256,16 @@ def build_search_request(
                 "should": clauses["should"],
                 "filter": clauses["filter"],
                 "must_not": clauses["must_not"],
-                **({"minimum_should_match": 0} if clauses["should"] else {}),
             }
         },
-        aggs={},
+        aggs={
+            "openings": {"terms": {"field": "opening_name.keyword", "size": 10}},
+            "results": {"terms": {"field": "result", "size": 3}},
+            "years": {
+                "terms": {"field": "year", "size": 10, "order": {"_key": "desc"}}
+            },
+            "eco_categories": {"terms": {"field": "eco_prefix", "size": 5}},
+        },
         sort=[{"avg_rating": "desc"}, {"game_hash": "asc"}],
         search_after=decoded_cursor,
         size=page_size,
