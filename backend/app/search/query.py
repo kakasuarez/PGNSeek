@@ -10,6 +10,7 @@ Three-stage query pipeline:
 from dataclasses import dataclass, field
 from typing import Any
 import re
+import json, base64
 
 PATTERNS = {
     "rating_min": r"\b(\d{4})\+",
@@ -149,6 +150,12 @@ def build_search_request(
     keyword_tokens = extract_keywords(query_string)
     tokens = {**pattern_tokens, **keyword_tokens}
     clauses = resolve_intent(tokens)
+    decoded_cursor = None
+    if cursor:
+        try:
+            decoded_cursor = json.loads(base64.urlsafe_b64decode(cursor.encode()))
+        except Exception:
+            decoded_cursor = None
 
     return ESSearchRequest(
         query={
@@ -162,7 +169,7 @@ def build_search_request(
         },
         aggs={},
         sort=[{"avg_rating": "desc"}, {"game_hash": "asc"}],
-        search_after=None,
+        search_after=decoded_cursor,
         size=page_size,
         source_fields=[
             "game_hash",
