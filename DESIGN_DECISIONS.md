@@ -272,19 +272,7 @@ GET /health   (unversioned — infrastructure concern)
 
 ---
 
-### 3.3 Caching: in-memory dict for MVP, Redis interface ready
-
-**Decision:** Repeated identical queries (same `q` + `page_size` + `cursor`) are served from an in-memory LRU cache with `CACHE_TTL_SECONDS` (default: 300s) TTL and `CACHE_MAX_SIZE` (default: 1,000 entries) max size.
-
-**Interface contract:** The cache is accessed only through a thin wrapper in `app/search/cache.py`. The wrapper's interface (`get(key)`, `set(key, value)`) is identical whether the backend is an in-memory dict or Redis. Switching to Redis requires only changing the backend inside `cache.py`.
-
-**What is cached:** The full serialized `SearchResponse`. The cache key is `sha256(q + page_size + cursor)`.
-
-**What is not cached:** Individual game lookups (`/games/{hash}`) — ES handles these with its own shard-level caching.
-
----
-
-### 3.4 CORS: localhost:5173 in development, configurable in production
+### 3.3 CORS: localhost:5173 in development, configurable in production
 
 **Decision:** The `CORSMiddleware` allows `http://localhost:5173` (Vite's default dev port) in development. In production, `ALLOWED_ORIGINS` will be set as an environment variable.
 
