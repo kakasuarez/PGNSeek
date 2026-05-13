@@ -49,6 +49,7 @@ app = FastAPI(
 
 app.state.limiter = limiter
 
+
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(
         status_code=429,
@@ -59,11 +60,12 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRe
         ).model_dump(),
     )
 
+
 app.add_exception_handler(RateLimitExceeded, rate_limit_handler)  # type: ignore[arg-type]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite dev server
+    allow_origins=["http://127.0.0.1:5173"],  # Vite dev server
     allow_credentials=True,
     allow_methods=["GET"],
     allow_headers=["*"],
@@ -71,9 +73,12 @@ app.add_middleware(
 
 # ── Exception handlers ────────────────────────────────────────────────────────
 
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    log.error("unhandled_exception", error=str(exc), path=request.url.path, exc_info=exc)
+    log.error(
+        "unhandled_exception", error=str(exc), path=request.url.path, exc_info=exc
+    )
     return JSONResponse(
         status_code=500,
         content=ErrorDetail(
@@ -83,7 +88,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         ).model_dump(),
     )
 
+
 # ── Routes ────────────────────────────────────────────────────────────────────
+
 
 @app.get("/health")
 async def health():
@@ -99,4 +106,5 @@ async def health():
 
 # Search router registered here — implemented in api/search.py
 from app.api.search import router as search_router
+
 app.include_router(search_router, prefix="/api/v1")
