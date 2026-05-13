@@ -30,6 +30,7 @@ class GameResult(BaseModel):
     event:                  Optional[str]   = None
     source_file:            Optional[str]   = None
     pgn_moves:              Optional[str]   = None
+    endgame_type:           Optional[str]   = None
 
 
 # ── Aggregations ─────────────────────────────────────────────────────────────

@@ -286,7 +286,8 @@ def build_search_request(
             "piece_sacrifices",
             "entered_endgame",
             "event",
-            "pgn_moves"
+            "pgn_moves",
+            "endgame_type"
         ],
         debug_tokens={"raw_query": query_string},
         debug_filter=clauses["filter"],
