@@ -5,13 +5,21 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { parseUciMoves, formatMoveNumber } from "@/lib/chess";
+import { useKeyboardShortcuts } from "./use-keyboard-shortcuts";
 
 export function BoardViewer({ pgnMoves }: { pgnMoves?: string | null }) {
   const parsed = useMemo(() => parseUciMoves(pgnMoves), [pgnMoves]);
   const [plyIndex, setPlyIndex] = useState(parsed.moves.length);
 
+  const decrementPly = () => setPlyIndex((value) => Math.max(0, value - 1));
+  const incrementPly = () =>
+              setPlyIndex((value) => Math.min(parsed.moves.length, value + 1));
+
   const currentFen =
     plyIndex === 0 ? parsed.initialFen : parsed.moves[plyIndex - 1]?.fen;
+
+  useKeyboardShortcuts(decrementPly, ["ArrowLeft"]);
+  useKeyboardShortcuts(incrementPly, ["ArrowRight"]);
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
@@ -35,7 +43,7 @@ export function BoardViewer({ pgnMoves }: { pgnMoves?: string | null }) {
           <Button
             variant="secondary"
             size="icon"
-            onClick={() => setPlyIndex((value) => Math.max(0, value - 1))}
+            onClick={decrementPly}
             disabled={plyIndex === 0}
             aria-label="Previous move"
           >
@@ -47,9 +55,7 @@ export function BoardViewer({ pgnMoves }: { pgnMoves?: string | null }) {
           <Button
             variant="secondary"
             size="icon"
-            onClick={() =>
-              setPlyIndex((value) => Math.min(parsed.moves.length, value + 1))
-            }
+            onClick={incrementPly}
             disabled={plyIndex === parsed.moves.length}
             aria-label="Next move"
           >
