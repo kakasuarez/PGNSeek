@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { BoardViewer } from "@/components/game/board-viewer";
 import { GameHeader } from "@/components/game/game-header";
 import { Card } from "@/components/ui/card";
@@ -15,11 +15,18 @@ export function GamePage() {
     enabled: Boolean(gameHash),
   });
   const navigate = useNavigate();
+  const location = useLocation();
 
   return (
     <div className="space-y-5">
       <button
-        onClick={() => {navigate(-1);}}
+        onClick={() => {
+          if (location.key !== "default") {
+            navigate(-1);
+          } else {
+            navigate("/", { replace: true });
+          }
+        }}
         className="inline-flex items-center gap-2 text-sm text-[var(--muted)] transition hover:text-white"
       >
         <ArrowLeft className="h-4 w-4" />
