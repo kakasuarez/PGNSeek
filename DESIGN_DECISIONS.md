@@ -229,10 +229,10 @@ This document is the authoritative record of every significant design decision m
 
 **Decision:** The public API has exactly three endpoints, and they will not change shape without a version bump to `/api/v2`.
 
-```
+```http
 GET /api/v1/search?q=<string>&page_size=<int>&cursor=<token>
 GET /api/v1/games/<game_hash>
-GET /api/v1/games/similar/<game_hash>
+GET /api/v1/games/<game_hash>/similar
 GET /health   (unversioned — infrastructure concern)
 ```
 
