@@ -1,4 +1,18 @@
 services:
+  meilisearch:
+    image: getmeili/meilisearch:v1
+    container_name: pgnseek_meilisearch
+    environment:
+      - MEILI_ENV=development
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-local-development-master-key}
+      - MEILI_HTTP_ADDR=0.0.0.0:7700
+    ports:
+      - "7700:7700"
+    volumes:
+      - meili_data:/meili_data
+    networks:
+      - pgnseek_net
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
     container_name: pgnseek_es
@@ -35,12 +49,15 @@ services:
 
   # backend:
   #   build:
-  #     context: ../backend
-  #     dockerfile: Dockerfile
+  #     context: ..
+  #     dockerfile: backend/Dockerfile
   #   container_name: pgnseek_backend
   #   env_file:
   #     - ../.env
   #   environment:
+  #     - SEARCH_BACKEND=meilisearch
+  #     - MEILI_HOST=http://meilisearch:7700
+  #     - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-local-development-master-key}
   #     - ES_HOST=http://elasticsearch:9200
   #   ports:
   #     - "8000:8000"
@@ -48,8 +65,7 @@ services:
   #     - ../backend:/app
   #     - ../pipeline:/pipeline
   #   depends_on:
-  #     elasticsearch:
-  #       condition: service_healthy
+  #     - meilisearch
   #   networks:
   #     - pgnseek_net
   #   command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -72,6 +88,7 @@ services:
 
 volumes:
   es_data:
+  meili_data:
   frontend_node_modules:
 
 networks:

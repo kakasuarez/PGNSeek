@@ -3,8 +3,8 @@ app/search/query.py
 
 Three-stage query pipeline:
     Stage 1 — Token classifier  (regex + keyword dicts)
-    Stage 2 — Intent resolver   (tokens → ES clause types)
-    Stage 3 — Query builder     (assemble ES bool query)
+    Stage 2 — Intent resolver   (tokens → backend intent / ES clause types)
+    Stage 3 — Query builder     (assemble backend request; ES uses bool query)
 """
 
 from dataclasses import dataclass, field
@@ -29,6 +29,7 @@ PLAYER_RESULT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 COLOR_EXCLUDED = {"white", "black"}
+PLAYER_NAME_EXCLUDED = COLOR_EXCLUDED | {"move", "moves", "game", "games"}
 
 
 def _normalise_outcome(word: str) -> str:
@@ -45,7 +46,8 @@ def extract_player_result(query: str) -> dict | None:
     if not m:
         return None
     name = m.group("name").strip()
-    if name.lower() in COLOR_EXCLUDED:
+    name_parts = name.lower().split()
+    if name.lower() in PLAYER_NAME_EXCLUDED or name_parts[-1] in COLOR_EXCLUDED:
         return None
     return {
         "player": name,
@@ -214,12 +216,12 @@ def resolve_intent(tokens: dict) -> dict:
 
 @dataclass
 class ESSearchRequest:
-    """Everything needed to execute one ES search."""
+    """Everything needed to execute one search request."""
 
     query: dict[str, Any]
     aggs: dict[str, Any]
     sort: list[dict]
-    search_after: list | None
+    search_after: Any | None
     size: int
     source_fields: list[str]
     debug_tokens: dict[str, Any]

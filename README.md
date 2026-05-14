@@ -8,9 +8,10 @@
 
 ## Architecture Overview
 
-1. PGN files are parsed by the ingestion pipeline, features are computed and indexed into Elasticsearch.
+1. PGN files are parsed by the ingestion pipeline, features are computed and indexed into the configured search backend.
 2. The FastAPI backend exposes a search API that runs a three-stage query pipeline.
-3. You can read more about the decisions made [here](DESIGN_DECISIONS.md).
+3. The production-oriented backend is Meilisearch with a 50k game cap. Elasticsearch remains available as a reference backend.
+4. You can read more about the decisions made [here](DESIGN_DECISIONS.md).
 
 ## Prerequisites
 
@@ -31,18 +32,39 @@
 4. Start the Docker services:
    ```
    cd docker
-   docker compose up -d elasticsearch kibana
+   docker compose up -d meilisearch
    ```
-   Verify that they are running by running `curl http://localhost:9200/_cluster/health`. Note that the first run downloads ~1.5GB and might take some time.
+   Verify that it is running with `curl http://localhost:7700/health`.
 5. Extract and ingest the PGN data: By default you should put your pgn files in `/data/pgn/`. Then run
 
    ```
    source backend/venv/bin/activate
+   export SEARCH_BACKEND=meilisearch
+   export MEILI_MASTER_KEY=local-development-master-key
    python pipeline/ingest.py
    ```
 
-6. Run the backend: `uvicorn app.main:app --reload --port 8000`. You can try out the APIs at the FastAPI documentation at `http://127.0.0.1:8000/docs`.
+6. Run the backend:
+   ```
+   source backend/venv/bin/activate
+   cd backend
+   SEARCH_BACKEND=meilisearch MEILI_MASTER_KEY=local-development-master-key uvicorn app.main:app --reload --port 8000
+   ```
+   You can try out the APIs at the FastAPI documentation at `http://127.0.0.1:8000/docs`.
 
 ## Workflow
 
-1. To reset everything cleanly run `docker compose down -v` to wipe ES data and `python pipeline/ingest.py --reset` to clear ingestion state.
+1. To reset everything cleanly run `docker compose down -v` to wipe search data and `python pipeline/ingest.py --reset` to clear ingestion state.
+
+## Railway
+
+The backend service is configured for Railway through `railway.toml` and `backend/Dockerfile`.
+Set these Railway variables for the backend service:
+
+- `SEARCH_BACKEND=meilisearch`
+- `MEILI_HOST=<your Meilisearch service URL>`
+- `MEILI_MASTER_KEY=<at least 16 bytes in production>`
+- `MEILI_INDEX=chess_games`
+- `ENV=production`
+
+Railway provides `PORT`; the Dockerfile starts Uvicorn on `0.0.0.0:${PORT:-8000}`.

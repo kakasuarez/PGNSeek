@@ -16,7 +16,7 @@ import structlog
 
 from app.config import settings
 from app.logging_config import configure_logging
-from app.search.elasticsearch_backend import ElasticsearchSearchBackend
+from app.search.factory import create_search_backend
 from app.models.schemas import ErrorDetail
 
 configure_logging()
@@ -28,8 +28,8 @@ limiter = Limiter(key_func=get_remote_address)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    log.info("startup", env=settings.ENV, es_host=settings.ES_HOST)
-    search_backend = ElasticsearchSearchBackend()
+    log.info("startup", env=settings.ENV, search_backend=settings.SEARCH_BACKEND)
+    search_backend = create_search_backend()
     search_backend.setup()
     app.state.search_backend = search_backend
     yield
@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="PGNSeek",
-    description="Search millions of chess games with natural language queries",
+    description="Search chess games with natural language queries",
     version="0.1.0",
     lifespan=lifespan,
 )

@@ -12,6 +12,9 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
+    # Search backend
+    SEARCH_BACKEND: str = "elasticsearch"
+
     # Elasticsearch
     ES_HOST: str = "http://localhost:9200"
     ES_INDEX: str = "chess_games"
@@ -25,6 +28,14 @@ class Settings(BaseSettings):
     ECO_TO_OPENING_FILE: str = "./data/json/eco_to_opening.json"
     MIN_YEAR: int = 2010
     MAX_INDEXED_GAMES: int = 50000
+
+    # Meilisearch
+    MEILI_HOST: str = "http://localhost:7700"
+    MEILI_MASTER_KEY: str = ""
+    MEILI_INDEX: str = "chess_games"
+    MEILI_EMBEDDER: str = "feature_vector"
+    MEILI_TASK_TIMEOUT_MS: int = 120000
+    MEILI_PAGINATION_MAX_TOTAL_HITS: int = 50000
 
     # Feature extraction thresholds
     AGGRESSION_THRESHOLD: float = 3.0
@@ -70,6 +81,15 @@ class Settings(BaseSettings):
         if v not in {"development", "production"}:
             raise ValueError("ENV must be 'development' or 'production'")
         return v
+
+    @field_validator("SEARCH_BACKEND")
+    @classmethod
+    def validate_search_backend(cls, v: str) -> str:
+        allowed = {"elasticsearch", "meilisearch"}
+        normalised = v.lower()
+        if normalised not in allowed:
+            raise ValueError(f"SEARCH_BACKEND must be one of {allowed}")
+        return normalised
 
     class Config:
         env_file = ".env"

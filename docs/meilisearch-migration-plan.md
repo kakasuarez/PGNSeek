@@ -6,6 +6,7 @@ Elasticsearch as the active implementation.
 
 ## Step 1: Stabilize The Backend Contract
 
+- Status: complete.
 - Keep API response schemas unchanged.
 - Route startup, health checks, game lookup, search, similarity, and ingestion
   through `SearchBackend`.
@@ -14,14 +15,19 @@ Elasticsearch as the active implementation.
 
 ## Step 2: Make The 50k Cap Explicit
 
+Status: complete.
+
 - Use `MAX_INDEXED_GAMES=50000` as the production cap.
 - Reset ingestion state before building a Meilisearch index from scratch.
 - Treat `game_hash` as the primary key in both backends.
 
 ## Step 3: Add Meilisearch Infrastructure
 
-- Add `meilisearch-python` to `requirements.txt`.
+Status: complete.
+
+- Add `meilisearch` to `requirements.txt`.
 - Add Meilisearch to Docker Compose.
+- Add Railway-oriented backend Docker config.
 - Add settings:
   - `SEARCH_BACKEND=elasticsearch|meilisearch`
   - `MEILI_HOST`
@@ -29,6 +35,8 @@ Elasticsearch as the active implementation.
   - `MEILI_INDEX`
 
 ## Step 4: Implement `MeilisearchSearchBackend`
+
+Status: complete.
 
 - Create the index with `game_hash` as primary key.
 - Configure searchable attributes:
@@ -55,18 +63,22 @@ Elasticsearch as the active implementation.
 
 ## Step 5: Translate Query Semantics
 
+Status: complete for MVP parity.
+
 - Convert the current token output into:
   - Meilisearch `q` text for opening/player search.
   - Meilisearch `filter` expressions for exact and range constraints.
   - Sort by `avg_rating:desc, game_hash:asc`.
-- Replace ES `should` clauses with either ranking rules or explicit sorts.
+- Replace ES `should` clauses with explicit style-aware sorts.
 - Keep `query_debug` populated with the original parsed tokens and translated
   Meilisearch request details.
 
 ## Step 6: Port Similarity Search
 
+Status: complete.
+
 - Store the 19-dimensional feature vector in Meilisearch `_vectors`.
-- Implement similar-game lookup with Meilisearch vector search.
+- Implement similar-game lookup with Meilisearch `/similar`.
 - Exclude the source `game_hash` from returned results.
 
 ## Step 7: Validate With A 50k Corpus

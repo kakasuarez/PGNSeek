@@ -29,7 +29,7 @@ limiter = Limiter(key_func=get_remote_address)
     response_model=SearchResponse,
     summary="Search chess games",
     description=(
-        "Search across millions of chess games using natural language. "
+        "Search across the indexed chess game corpus using natural language. "
         "Examples: 'aggressive Sicilian white wins 2400+', "
         "'Carlsen positional endgame', 'French defense under 30 moves draw'"
     ),

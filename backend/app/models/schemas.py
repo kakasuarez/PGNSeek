@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Any
 
 
-# ── Game document (what comes back from ES _source) ──────────────────────────
+# ── Game document (what comes back from the search backend) ──────────────────
 
 class GameResult(BaseModel):
     game_hash:              str
@@ -62,7 +62,7 @@ class SearchResponse(BaseModel):
     results:      list[GameResult]
     total:        int
     page_size:    int
-    cursor:       Optional[str]   = None   # opaque search_after token (base64)
+    cursor:       Optional[str]   = None   # opaque backend pagination token
     query_debug:  QueryDebug
     aggregations: Aggregations
 

@@ -1,8 +1,8 @@
 # PGNSeek — Design Decisions
 
-**Project:** PGNSeek — natural language search across millions of chess games  
+**Project:** PGNSeek — natural language search across a curated chess game corpus
 **Status:** Active  
-**Last updated:** 2026-04-18
+**Last updated:** 2026-05-14
 
 This document is the authoritative record of every significant design decision made during the project. Before changing anything recorded here, update this document first and note the reason. Each decision includes the context, the choice made, the alternatives considered, and the consequences of changing it later.
 
@@ -18,44 +18,44 @@ This document is the authoritative record of every significant design decision m
 
 ## 1. Data Layer
 
-### 1.1 Storage architecture: Elasticsearch-primary, PostgreSQL deferred
+### 1.1 Storage architecture: search-backend primary, PostgreSQL deferred
 
-**Decision:** Elasticsearch is the only datastore for the MVP. PostgreSQL is not used yet.
+**Decision:** The search backend is the only datastore for the MVP. PostgreSQL is not used yet. Production is capped at 50,000 indexed games and uses Meilisearch by default. Elasticsearch remains available as a reference backend and as the safer option if the project returns to the full 28M game dataset.
 
-**Rationale:** Every query in PGNSeek is a search operation — fuzzy text matching on player names and openings, range filters on ratings and years, numeric comparisons on computed features. Elasticsearch handles all of these natively. PostgreSQL would add operational complexity with no benefit at this stage.
+**Rationale:** Every query in PGNSeek is a search operation: fuzzy text matching on player names and openings, range filters on ratings and years, numeric comparisons on computed features, facets, and similar-game lookup. At the 50k production cap, Meilisearch provides the needed feature set with lower operational complexity than Elasticsearch. PostgreSQL would add operational complexity with no benefit at this stage.
 
-**Constraint:** The FastAPI application and Docker Compose are structured as if PostgreSQL exists (a `db` service slot is reserved in Compose, Pydantic models are kept separate from ES-specific logic). Adding PostgreSQL for user accounts, saved searches, or job tracking in a later phase requires no architectural changes.
+**Constraint:** The FastAPI application uses a `SearchBackend` interface. Startup, health checks, API search, game lookup, similarity, and ingestion must go through this interface rather than importing a concrete search engine directly.
 
-**Consequences of reversing:** Low. PostgreSQL can be added as a second service. No existing code needs to change.
-
----
-
-### 1.2 Index versioning and alias strategy
-
-**Decision:** The physical ES index is always named `chess_games_v{N}` (starting at `chess_games_v1`). All application queries hit the alias `chess_games`, which points to the current version. The alias name is what goes in `.env` as `ES_INDEX_ALIAS`.
-
-**Rationale:** Changing the index mapping (adding a field type, changing an analyzer) requires creating a new index and reindexing all documents. Without an alias, this requires a coordinated downtime window. With an alias, the swap is atomic — one `update_aliases` call moves traffic from the old index to the new one with zero downtime.
-
-**Reindex procedure:**
-1. Create `chess_games_v2` with the new mapping
-2. Run the ingestion pipeline targeting `chess_games_v2`
-3. Call `reindex_swap(es, "chess_games_v2")` — atomic alias swap
-4. Delete `chess_games_v1`
-
-**Consequences of reversing:** Breaking. All search and ingestion code references the alias, not the versioned index. Removing the alias layer means hardcoding an index name everywhere.
+**Consequences of reversing:** Moderate. PostgreSQL can be added as a second service, but replacing Meilisearch/Elasticsearch as the primary search backend requires implementing the `SearchBackend` contract and reindexing.
 
 ---
 
-### 1.3 Deduplication via game_hash as document _id
+### 1.2 Search index naming and migration strategy
 
-**Decision:** Every game's Elasticsearch `_id` is set to a 32-character SHA-256 hash derived from `White|Black|Date|Moves`. This hash is also stored as a queryable field `game_hash` in `_source`.
+**Decision:** Meilisearch uses a single index named by `MEILI_INDEX` (default `chess_games`) with `game_hash` as the primary key. Elasticsearch keeps its versioned physical index plus alias strategy (`chess_games_v{N}` behind `ES_INDEX_ALIAS`) for the reference backend.
+
+**Rationale:** Meilisearch settings are updated through index settings and the production cap is small enough that rebuilding a 50k corpus is acceptable. Elasticsearch mappings still require versioned reindexing and alias swaps.
+
+**Meilisearch reindex procedure:**
+1. Set `SEARCH_BACKEND=meilisearch`
+2. Clear ingestion state with `python pipeline/ingest.py --reset`
+3. Clear or recreate the Meilisearch index
+4. Run ingestion until `MAX_INDEXED_GAMES` is reached
+
+**Consequences of reversing:** Low for Meilisearch at 50k because a rebuild is cheap. High for Elasticsearch at full scale because alias-based zero-downtime swaps avoid coordinated downtime.
+
+---
+
+### 1.3 Deduplication via game_hash as document id
+
+**Decision:** Every game's backend document id is a 32-character SHA-256 hash derived from `White|Black|Date|Moves`. This hash is also stored as a queryable field `game_hash`.
 
 **Hash input:**
 ```
 {White}|{Black}|{Date}|{space-separated UCI moves}
 ```
 
-**Rationale:** Multiple PGN files (across different years of Lichess dumps, FIDE exports, etc.) will contain the same famous games. Without deduplication, the index grows unboundedly and search results contain duplicates. Using the hash as `_id` makes every bulk index call an idempotent upsert — rerunning the pipeline on a file that was already processed produces no side effects.
+**Rationale:** Multiple PGN files (across different years of Lichess dumps, FIDE exports, etc.) will contain the same famous games. Without deduplication, the index grows unboundedly and search results contain duplicates. Using the hash as the backend document id makes every bulk index call an idempotent upsert. Elasticsearch uses `_id`; Meilisearch uses `game_hash` as the primary key.
 
 **Limitation:** Two games between the same players on the same date with identical moves but different annotations will hash identically. This is acceptable — they are the same game.
 
@@ -63,21 +63,21 @@ This document is the authoritative record of every significant design decision m
 
 ---
 
-### 1.4 ES index mapping is strict and flat
+### 1.4 Search documents are explicit and flat
 
-**Decision:** The index mapping uses `"dynamic": "strict"` — unknown fields are rejected, not silently indexed. All computed features are flat numeric fields (`float`, `integer`, `boolean`), never nested objects.
+**Decision:** Search documents use an explicit flat schema. All computed features are flat numeric fields (`float`, `integer`, `boolean`), never nested objects. Elasticsearch enforces this with `"dynamic": "strict"`. Meilisearch enforces behavior through explicit `displayedAttributes`, `searchableAttributes`, `filterableAttributes`, and `sortableAttributes`.
 
-**Rationale for strict:** Unknown fields silently indexed into ES cause mapping conflicts when the field appears with different types across documents. Failing loudly at index time is better than discovering a corrupted mapping at query time.
+**Rationale for explicit settings:** Unknown or mistyped fields create debugging problems and can affect search relevance. Elasticsearch can reject them strictly. Meilisearch is more permissive, so the backend controls which fields are searchable, filterable, sortable, faceted, and returned by the API.
 
 **Rationale for flat features:** Nested objects in ES require nested queries, which are significantly more expensive and complex. Every feature that informs a search (`avg_material_swings`, `piece_sacrifices`, `entered_endgame`) is a single number. Numeric range comparisons on flat fields are the cheapest possible query type in ES.
 
-**Consequences of reversing:** Adding a nested field requires a mapping change (reindex). Dynamic mapping means unexpected fields silently appear in the index — debugging becomes harder.
+**Consequences of reversing:** Adding nested or implicit fields makes backend parity harder and requires reindexing or settings changes.
 
 ---
 
-### 1.5 Opening name field uses the english analyzer with synonyms
+### 1.5 Opening name synonyms are backend-specific
 
-**Decision:** The `opening_name` field uses a custom analyzer (`opening_analyzer`) that applies the English stemmer and a hand-maintained synonym filter.
+**Decision:** Opening-name synonym handling is maintained per backend. Elasticsearch uses a custom analyzer with stemming and synonyms. Meilisearch uses the index `synonyms` setting and its built-in typo tolerance.
 
 **Stemmer effect:** "attacking" → "attack", "positional" → "position", "declined" → "declin". Queries for "Sicilian attacking" match games tagged "Sicilian Attack".
 
@@ -89,7 +89,7 @@ This document is the authoritative record of every significant design decision m
 
 **Rationale:** Chess opening names have enormous variation in how they are written — abbreviations, hyphenation differences, possessive forms. The synonym filter encodes domain knowledge that no generic analyzer captures.
 
-**Maintenance:** The synonym list lives in the index mapping (`app/search/index.py`). Adding a synonym requires a mapping update and reindex, or using a synonym file on disk (the production upgrade path).
+**Maintenance:** The synonym list lives in backend settings code. Adding a synonym requires updating the backend setting and reindexing or refreshing settings, depending on the backend.
 
 **Consequences of reversing:** Search recall drops significantly for opening queries. Users who type "KID" get no results for King's Indian games.
 
@@ -121,7 +121,7 @@ This document is the authoritative record of every significant design decision m
 
 ### 1.7 Ingestion pipeline is synchronous and resumable
 
-**Decision:** The ingestion pipeline is a synchronous Python script (`pipeline/ingest.py`) that processes PGN files one at a time. Completed files are recorded in `ingestion_state.json`. The pipeline can be interrupted and restarted without reprocessing completed files.
+**Decision:** The ingestion pipeline is a synchronous Python script (`pipeline/ingest.py`) that processes PGN files one at a time. Completed files are recorded in `ingestion_state.json`. The pipeline can be interrupted and restarted without reprocessing completed files. It stops at `MAX_INDEXED_GAMES` (default 50,000) for the Meilisearch production path.
 
 **Upgrade path to async (when needed):**
 - Each PGN file becomes a Celery task
@@ -131,6 +131,8 @@ This document is the authoritative record of every significant design decision m
 **Why not async for MVP:** Celery + Redis adds two more services and significant configuration overhead. The synchronous pipeline is easy to debug, produces clear logs, and is fast enough for the initial data load.
 
 **Year filter:** Games with a `Date` header year below `MIN_YEAR` (default: 2010) are skipped during ingestion. This is applied at parse time before any feature computation.
+
+**Production cap:** The ingestion state tracks `total_indexed`. When the cap is reached mid-file, that file is left resumable instead of being marked complete.
 
 **Consequences of reversing:** Resumability is lost — killing the process means starting over.
 
@@ -143,8 +145,8 @@ This document is the authoritative record of every significant design decision m
 **Decision:** The query layer is fully deterministic. There is no ML model, no embeddings, no LLM at query time (in the MVP). The pipeline has three stages:
 
 1. **Token classifier** — regex patterns + keyword dictionaries → typed token dict
-2. **Intent resolver** — tokens → ES clause types (must / should / filter / must_not)
-3. **Query builder** — clauses → ES bool query body
+2. **Intent resolver** — tokens → backend-neutral intent plus ES clause types
+3. **Query builder** — assemble backend request; ES still receives a bool query body
 
 **Upgrade path:**
 - **Phase 2:** Add an LLM preprocessing step that converts a free-text query to a structured JSON of detected filters. The JSON feeds into Stage 2 unchanged. This adds latency (~300ms) but dramatically improves recall for unusual phrasings.
@@ -156,70 +158,57 @@ This document is the authoritative record of every significant design decision m
 
 ---
 
-### 2.2 Clause semantics: must vs filter vs should
+### 2.2 Query intent semantics
 
-**Decision:** Each detected token type maps to a specific ES clause type with consistent semantics:
+**Decision:** Each detected token type maps to consistent backend intent. Elasticsearch receives ES bool clauses. Meilisearch receives a text query, filter expressions, facets, and sort instructions derived from the same tokens.
 
-| Token type | ES clause | Rationale |
-|---|---|---|
-| Opening name | `must` → `match` with fuzziness | Scored — relevance matters. A closer match to "Sicilian" should rank higher |
-| Player name | `must` → `match` with fuzziness | Scored — "Carlsen" should rank exact matches above "Carlsen-like" spellings |
-| Result | `filter` → `term` | Binary — either white won or didn't. No scoring value |
-| Rating range | `filter` → `range` | Binary — either in range or not |
-| Year | `filter` → `term` | Binary |
-| Style tags (aggressive, positional) | `should` → `range` on feature field | Soft preference — boosts matching games, doesn't exclude non-matching ones |
-| Move count | `filter` → `range` | Binary |
+| Token type | Elasticsearch | Meilisearch | Rationale |
+|---|---|---|---|
+| Opening name | `must` → `match` with fuzziness | `q` restricted to `opening_name` | Scored — relevance matters |
+| Player name | `must` → `match` with fuzziness | `q` restricted to `white` and/or `black` | Scored — typo tolerance matters |
+| Result | `filter` → `term` | `filter` expression | Binary — either matched or not |
+| Rating range | `filter` → `range` | `filter` expression | Binary — either in range or not |
+| Year | `filter` → `term` | `filter` expression | Binary |
+| Style tags (aggressive, positional) | `should` → `range` on feature field | style-aware sort on feature field | Soft preference without excluding games |
+| Move count | `filter` → `range` | `filter` expression | Binary |
 
-**Key principle:** `filter` clauses are cached by ES and contribute zero scoring overhead. Use `filter` for anything binary. Use `must` only when ranking by relevance to the term matters. Use `should` for soft preferences that should boost score without excluding results.
+**Key principle:** Binary constraints remain filters. Text constraints remain scored search. Style terms affect ranking but do not filter results out.
 
-**Consequences of reversing:** Putting everything in `must` means a query for "aggressive Sicilian" returns zero results if no game is tagged both — instead of returning Sicilian games boosted by aggressiveness score.
-
----
-
-### 2.3 Pagination: search_after, not from/size
-
-**Decision:** Pagination uses ES `search_after` with a composite sort key of `[avg_rating DESC, _id ASC]`. The cursor returned in the API response is a base64-encoded JSON array of the last hit's sort values. Clients pass this as the `cursor` query parameter on the next request.
-
-**Rationale:** ES refuses `from/size` queries where `from + size > index.max_result_window` (default 10,000). With millions of games, users who page deep will hit this wall. `search_after` has no depth limit.
-
-**Cursor encoding:** `base64(json([avg_rating_value, "_id_value"]))` — opaque to clients.
-
-**Trade-off:** `search_after` cursors are not stable if new documents are indexed between requests. For a search tool this is acceptable — unlike e-commerce, users don't need perfectly consistent pagination across writes.
-
-**Consequences of reversing:** Results break for any user paging beyond result 10,000. Error is a hard 400 from ES, not a graceful degradation.
+**Consequences of reversing:** Treating style as a hard filter can make normal queries look broken. Treating binary fields as text reduces precision and makes facets harder to trust.
 
 ---
 
-### 2.4 Aggregations included in every search response
+### 2.3 Pagination
+
+**Decision:** The API keeps a single opaque `cursor` field. Elasticsearch uses `search_after` with a composite sort key of `[avg_rating DESC, _id ASC]`. Meilisearch uses a base64-encoded JSON offset cursor.
+
+**Rationale:** Elasticsearch needs `search_after` for the full dataset path. Meilisearch's production path is capped at 50k games and its documented pagination model is `offset`/`limit` or `page`/`hitsPerPage`. The Meilisearch index sets `pagination.maxTotalHits` to the production cap.
+
+**Cursor encoding:** Opaque to clients. ES cursors encode sort values. Meilisearch cursors encode `{"offset": N}`.
+
+**Trade-off:** Meilisearch warns that raising `maxTotalHits` above the default can affect performance. The accepted tradeoff is that 50k is the product cap; if the corpus returns to millions of games, Elasticsearch/OpenSearch should be preferred.
+
+**Consequences of reversing:** Returning to deep pagination over millions of games should use Elasticsearch/OpenSearch or another backend with cursor pagination designed for that scale.
+
+---
+
+### 2.4 Facets included in every search response
 
 **Decision:** Every search response includes an `aggregations` object with counts for: top openings in results, result distribution (white/black/draw), year distribution, ECO category distribution.
 
-**Rationale:** Aggregations are computed by ES in the same query as the search — there is no second round trip. The cost is minimal. The UX benefit is large: the frontend can render faceted filter chips ("Sicilian: 3,421 | French: 812") that update with every query. This is the feature that makes the product feel like a real search engine rather than a list of results.
+**Rationale:** Elasticsearch computes these as terms aggregations. Meilisearch computes these as facet distributions over filterable attributes. The API shape stays named `aggregations` for client compatibility.
 
-**Current agg definitions:** Implemented in `app/search/executor.py`. Top 10 buckets per aggregation.
+**Current definitions:** Elasticsearch definitions live in `app/search/query.py` and response mapping in `app/search/executor.py`. Meilisearch requests facets for `opening_name`, `result`, `year`, and `eco_prefix` in `app/search/meilisearch_backend.py`.
 
 **Consequences of reversing:** The frontend loses live facet counts. This is a visible product regression.
 
 ---
 
-### 2.5 Default scoring: BM25 with planned function_score upgrade
+### 2.5 Default scoring and ranking
 
-**Decision:** The MVP uses ES's default BM25 scoring for `must` clauses. A `function_score` wrapper will be added in the first post-MVP sprint to boost results by `avg_rating` and `avg_material_swings` when style queries are present.
+**Decision:** Elasticsearch uses default BM25 scoring for `must` clauses. Meilisearch uses its built-in ranking rules and explicit sort order. Default result order is `avg_rating:desc, game_hash:asc`; style queries place the relevant computed feature before rating in the sort list.
 
-**Planned function_score shape:**
-```json
-{
-  "function_score": {
-    "query": { "bool": { ... } },
-    "functions": [
-      { "field_value_factor": { "field": "avg_material_swings", "factor": 1.5, "modifier": "log1p" } }
-    ],
-    "boost_mode": "multiply"
-  }
-}
-```
-
-**Why deferred:** Default BM25 produces acceptable results for the MVP. Tuning `function_score` requires seeing real query results first — premature optimization here produces worse results than waiting for data.
+**Why no function score in Meilisearch:** Meilisearch does not use Elasticsearch's `function_score` DSL. The MVP uses explicit sorts for predictable behavior and will tune ranking after evaluating real search logs.
 
 ---
 
@@ -267,7 +256,7 @@ GET /health   (unversioned — infrastructure concern)
 
 **Decision:** Every endpoint is rate-limited at 60 requests/minute per IP using `slowapi`. The limit is configurable via `RATE_LIMIT_PER_MINUTE` in `.env`.
 
-**Rationale:** Without rate limiting, a misbehaving client or accidental loop in development hammers Elasticsearch. 60 req/min is generous for a human user and restrictive for automation.
+**Rationale:** Without rate limiting, a misbehaving client or accidental loop in development hammers the search backend. 60 req/min is generous for a human user and restrictive for automation.
 
 **Upgrade path:** When user accounts are added, switch from per-IP to per-token limiting.
 
@@ -290,7 +279,7 @@ pgnseek/
   backend/
     app/
       api/          ← FastAPI route handlers
-      search/       ← query pipeline, ES index management, executor
+      search/       ← query pipeline, backend implementations, index management
       ingestion/    ← PGN parser, feature extractor, bulk indexer
       models/       ← Pydantic schemas (API contract)
     tests/
@@ -307,7 +296,7 @@ pgnseek/
   DESIGN_DECISIONS.md   ← this file
 ```
 
-**Key rule:** `pipeline/ingest.py` imports directly from `backend/app/`. There is no code duplication between the ingestion CLI and the API server. The pipeline and the API share the same `config.py`, `index.py`, and `ingestion/pipeline.py`.
+**Key rule:** `pipeline/ingest.py` imports directly from `backend/app/`. There is no code duplication between the ingestion CLI and the API server. The pipeline and the API share the same `config.py`, `SearchBackend` implementations, and `ingestion/pipeline.py`.
 
 **Consequences of reversing (splitting into multiple repos):** The shared import path breaks. Config, models, and ingestion logic must be duplicated or extracted into a shared package.
 
@@ -317,7 +306,7 @@ pgnseek/
 
 **Decision:** Every runtime configuration value lives in `.env` and is loaded via `app/config.py` (Pydantic `BaseSettings`). No value is hardcoded anywhere in the application code. Dev and prod differ only in their `.env` files, not in code paths.
 
-**The `.env.example` file is the canonical list of all configuration knobs.** When a new config value is added, `.env.example` must be updated in the same commit.
+**Important search variables:** `SEARCH_BACKEND`, `MEILI_HOST`, `MEILI_MASTER_KEY`, `MEILI_INDEX`, `MAX_INDEXED_GAMES`, and the existing ES variables. In Railway production, `MEILI_MASTER_KEY` must be at least 16 bytes because Meilisearch production mode requires a master key.
 
 **Consequences of reversing:** Deployment becomes environment-specific code. Docker images are no longer portable.
 
@@ -337,10 +326,11 @@ pgnseek/
 
 ### 4.4 Docker Compose service topology
 
-**Decision:** Four services in `docker-compose.yml`:
+**Decision:** Local Docker Compose supports Meilisearch as the default production-like search service, while keeping Elasticsearch and Kibana for comparison/reference work:
 
 | Service | Image | Port | Notes |
 |---|---|---|---|
+| `meilisearch` | getmeili/meilisearch:v1 | 7700 | Default local search backend for the 50k production path |
 | `elasticsearch` | elasticsearch:8.13.0 | 9200 | Security disabled for local dev. `xpack.security.enabled=false` |
 | `kibana` | kibana:8.13.0 | 5601 | Dev only — inspect index, run queries manually |
 | `backend` | Built from `backend/Dockerfile` | 8000 | `--reload` flag on in dev |
@@ -348,7 +338,9 @@ pgnseek/
 
 **ES memory:** JVM heap set to 1GB (`-Xms1g -Xmx1g`). Sufficient for development and moderate data volumes. Increase in production.
 
-**Health checks:** The backend service depends on ES being healthy (HTTP cluster health check) before starting. This prevents startup failures from race conditions.
+**Meilisearch security:** Local Compose uses `MEILI_ENV=development` and a local default key. Production must use `MEILI_ENV=production` for the Meilisearch service and provide `MEILI_MASTER_KEY`.
+
+**Railway:** The backend is configured with `railway.toml`, `backend/Dockerfile`, and a root `.dockerignore`. Railway supplies the `PORT` environment variable, and the backend container starts Uvicorn on `0.0.0.0:${PORT:-8000}`.
 
 **Kibana rationale:** Not used in production, but invaluable during development for inspecting the index mapping, running Kibana Query Language queries against real data, and verifying that computed features are correct.
 
@@ -362,13 +354,12 @@ These are explicitly not decided yet. They are recorded here so they are not for
 |---|---|---|
 | User accounts and saved searches | Post-MVP | Will require PostgreSQL |
 | Authentication model (JWT vs API keys) | When user accounts are added | — |
-| Production deployment target | After MVP is stable | Render, Railway, or self-hosted |
+| Production deployment target | MVP default chosen | Railway for backend; Meilisearch may be Railway-hosted or external |
 | Celery + Redis for async ingestion | When processing > 10 PGN files at once | Upgrade path is documented in §1.7 |
-| `function_score` tuning | After seeing real query results | Documented in §2.5 |
 | PGN viewer in search results | Frontend phase 2 | Requires react-chessboard integration |
 | Board position search via FEN | Phase 3 | Requires position hashing at index time |
-| Embedding-based semantic similarity | Phase 3 | "Find games like this one" feature |
-| Synonym file on disk vs inline | At next reindex | Disk-based synonyms can be updated without reindex |
+| Full 28M game dataset | If product needs full corpus | Prefer Elasticsearch/OpenSearch or another backend with stronger deep pagination |
+| Synonym management UI/file | After search tuning | Current synonyms live in backend settings code |
 
 ---
 
@@ -376,6 +367,7 @@ These are explicitly not decided yet. They are recorded here so they are not for
 
 | Date | Section | Change | Reason |
 |---|---|---|---|
+| 2026-05-14 | Search/Data/Infra | Switch production path to Meilisearch with 50k cap and `SearchBackend` abstraction | Reduce production ops complexity for capped dataset |
 | 2026-04-25 | Index | Add feature vector | Similarity search |
 | 2026-04-18 | Index | Add PGN moves | Debugging and final result |
 | 2026-04-14 | Index | Add endgame type | Improve endgame detection |

@@ -375,7 +375,7 @@ def index_pgn_file(search_backend: SearchBackend, pgn_path: Path, state: dict) -
          NEXT unread game, which is saved back to state
 
     On crash, the next run re-indexes at most ES_BULK_BATCH_SIZE games.
-    This is safe because game_hash is the ES _id -- re-indexing a game
+    This is safe because game_hash is the backend document id -- re-indexing a game
     that was already indexed is a no-op (backends upsert it by game_hash).
     """
     filename = pgn_path.name

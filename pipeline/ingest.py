@@ -21,7 +21,7 @@ if str(_backend) not in sys.path:
 
 from app.config import settings
 from app.logging_config import configure_logging
-from app.search.elasticsearch_backend import ElasticsearchSearchBackend
+from app.search.factory import create_search_backend
 from app.ingestion.pipeline import run_pipeline, load_state, clear_state
 
 configure_logging()
@@ -70,7 +70,7 @@ def main() -> None:
         print("Clearing ingestion state...")
         clear_state()
 
-    search_backend = ElasticsearchSearchBackend()
+    search_backend = create_search_backend()
     search_backend.setup()
     try:
         run_pipeline(search_backend)

@@ -1,0 +1,11 @@
+.git
+.venv
+backend/venv
+backend/.venv
+**/__pycache__
+**/*.pyc
+frontend/node_modules
+frontend/dist
+frontend/*.tsbuildinfo
+data/pgn
+data/json/ingestion_state.json
