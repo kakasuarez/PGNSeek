@@ -7,7 +7,7 @@ Responsibilities:
     1. Find all PGN files in PGN_DATA_DIR
     2. Resume interrupted files using byte-offset checkpointing
     3. Skip fully completed files
-    4. For each file: parse games -> compute features -> bulk index to ES
+    4. For each file: parse games -> compute features -> bulk index to the search backend
 
 State schema (ingestion_state.json):
     {
@@ -24,23 +24,20 @@ State schema (ingestion_state.json):
 Resume mechanism: f.seek(byte_offset) jumps directly to the start of the
 next unread game. State is written after every bulk flush, so on crash
 you re-index at most ES_BULK_BATCH_SIZE games — which is idempotent
-because game_hash is used as the ES document _id.
+because game_hash is used as the backend document id.
 """
 
 import json
 import hashlib
 import datetime
 from pathlib import Path
-from typing import Generator
 
 import chess
 import chess.pgn
-from elasticsearch import Elasticsearch
-from elasticsearch.helpers import bulk
 import structlog
 
 from app.config import settings
-from app.search.index import ALIAS_NAME
+from app.search.backend import SearchBackend
 
 log = structlog.get_logger()
 
@@ -322,18 +319,6 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
     }
 
 
-# -- Bulk indexing -------------------------------------------------------------
-
-
-def iter_bulk_actions(documents: list[dict]) -> Generator[dict, None, None]:
-    for doc in documents:
-        yield {
-            "_index": ALIAS_NAME,
-            "_id": doc["game_hash"],
-            "_source": doc,
-        }
-
-
 # -- Resumable state -----------------------------------------------------------
 
 
@@ -348,8 +333,9 @@ def load_state() -> dict:
         return {
             "completed": set(raw.get("completed", [])),
             "in_progress": raw.get("in_progress", {}),
+            "total_indexed": raw.get("total_indexed", 0),
         }
-    return {"completed": set(), "in_progress": {}}
+    return {"completed": set(), "in_progress": {}, "total_indexed": 0}
 
 
 def save_state(state: dict) -> None:
@@ -360,6 +346,7 @@ def save_state(state: dict) -> None:
             {
                 "completed": sorted(state["completed"]),
                 "in_progress": state["in_progress"],
+                "total_indexed": state.get("total_indexed", 0),
             },
             indent=2,
         )
@@ -376,7 +363,7 @@ def clear_state() -> None:
 # -- File-level indexer --------------------------------------------------------
 
 
-def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
+def index_pgn_file(search_backend: SearchBackend, pgn_path: Path, state: dict) -> dict:
     """
     Parse and index one PGN file with mid-file resumability.
 
@@ -389,7 +376,7 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
 
     On crash, the next run re-indexes at most ES_BULK_BATCH_SIZE games.
     This is safe because game_hash is the ES _id -- re-indexing a game
-    that was already indexed is a no-op (ES upserts it identically).
+    that was already indexed is a no-op (backends upsert it by game_hash).
     """
     filename = pgn_path.name
     file_log = log.bind(file=filename)
@@ -409,12 +396,18 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
 
     parsed = skipped = errors = 0
     batch: list[dict] = []
+    cap_reached = False
 
     with open(pgn_path, encoding="utf-8", errors="replace") as f:
         if resume_offset > 0:
             f.seek(resume_offset)
 
         while True:
+            remaining = settings.MAX_INDEXED_GAMES - state.get("total_indexed", 0)
+            if remaining <= 0:
+                cap_reached = True
+                break
+
             try:
                 game = chess.pgn.read_game(f)
             except Exception as exc:
@@ -434,9 +427,11 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
 
             batch.append(doc)
 
-            if len(batch) >= settings.ES_BULK_BATCH_SIZE:
-                success, _ = bulk(es, iter_bulk_actions(batch), raise_on_error=False)
+            effective_batch_size = min(settings.ES_BULK_BATCH_SIZE, remaining)
+            if len(batch) >= effective_batch_size:
+                success = search_backend.bulk_index(batch)
                 games_indexed += success
+                state["total_indexed"] = state.get("total_indexed", 0) + success
                 batch = []
 
                 # Checkpoint: save current position before reading the next game.
@@ -457,14 +452,28 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
                     errors=errors,
                 )
 
-        # Final partial batch
-        if batch:
-            success, _ = bulk(es, iter_bulk_actions(batch), raise_on_error=False)
-            games_indexed += success
+                if state.get("total_indexed", 0) >= settings.MAX_INDEXED_GAMES:
+                    cap_reached = True
+                    break
 
-    # Fully done: remove from in_progress, add to completed
-    state["in_progress"].pop(filename, None)
-    state["completed"].add(filename)
+        # Final partial batch
+        if batch and not cap_reached:
+            remaining = settings.MAX_INDEXED_GAMES - state.get("total_indexed", 0)
+            batch = batch[:remaining]
+            success = search_backend.bulk_index(batch) if batch else 0
+            games_indexed += success
+            state["total_indexed"] = state.get("total_indexed", 0) + success
+
+    if cap_reached:
+        file_log.info(
+            "file_paused_at_max_indexed_games",
+            games_indexed=games_indexed,
+            max_indexed_games=settings.MAX_INDEXED_GAMES,
+        )
+    else:
+        # Fully done: remove from in_progress, add to completed
+        state["in_progress"].pop(filename, None)
+        state["completed"].add(filename)
     save_state(state)
 
     summary = {
@@ -472,6 +481,7 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
         "indexed": games_indexed,
         "skipped_year": skipped,
         "errors": errors,
+        "cap_reached": cap_reached,
     }
     if errors > 0:
         file_log.warning("file_complete_with_errors", **summary)
@@ -484,7 +494,7 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
 # -- Pipeline orchestrator -----------------------------------------------------
 
 
-def run_pipeline(es: Elasticsearch) -> None:
+def run_pipeline(search_backend: SearchBackend) -> None:
     data_dir = Path(settings.PGN_DATA_DIR)
     pgn_files = sorted(data_dir.glob("*.pgn"))
     state = load_state()
@@ -502,11 +512,20 @@ def run_pipeline(es: Elasticsearch) -> None:
         completed=len(state["completed"]),
         resuming=len(interrupted),
         fresh=len(fresh),
+        total_indexed=state.get("total_indexed", 0),
+        max_indexed_games=settings.MAX_INDEXED_GAMES,
     )
 
     for pgn_path in ordered:
+        if state.get("total_indexed", 0) >= settings.MAX_INDEXED_GAMES:
+            log.info(
+                "max_indexed_games_reached",
+                total_indexed=state.get("total_indexed", 0),
+                max_indexed_games=settings.MAX_INDEXED_GAMES,
+            )
+            break
         try:
-            index_pgn_file(es, pgn_path, state)
+            index_pgn_file(search_backend, pgn_path, state)
         except Exception as exc:
             # State was already checkpointed mid-file.
             # Next run will resume from the last saved offset.
@@ -517,4 +536,8 @@ def run_pipeline(es: Elasticsearch) -> None:
                 exc_info=True,
             )
 
-    log.info("pipeline_complete", completed=len(state["completed"]))
+    log.info(
+        "pipeline_complete",
+        completed=len(state["completed"]),
+        total_indexed=state.get("total_indexed", 0),
+    )

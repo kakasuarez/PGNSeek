@@ -21,7 +21,7 @@ if str(_backend) not in sys.path:
 
 from app.config import settings
 from app.logging_config import configure_logging
-from app.search.index import get_es_client, setup_index
+from app.search.elasticsearch_backend import ElasticsearchSearchBackend
 from app.ingestion.pipeline import run_pipeline, load_state, clear_state
 
 configure_logging()
@@ -29,6 +29,9 @@ configure_logging()
 
 def show_status() -> None:
     state = load_state()
+    print(f"\nTotal indexed  : {state.get('total_indexed', 0):,}")
+    print(f"Indexing cap   : {settings.MAX_INDEXED_GAMES:,}")
+
     print(f"\nCompleted files : {len(state['completed'])}")
     for f in sorted(state["completed"]):
         print(f"  [done] {f}")
@@ -67,9 +70,12 @@ def main() -> None:
         print("Clearing ingestion state...")
         clear_state()
 
-    es = get_es_client()
-    setup_index(es)
-    run_pipeline(es)
+    search_backend = ElasticsearchSearchBackend()
+    search_backend.setup()
+    try:
+        run_pipeline(search_backend)
+    finally:
+        search_backend.close()
 
 
 if __name__ == "__main__":

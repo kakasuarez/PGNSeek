@@ -18,7 +18,6 @@ import structlog
 from app.config import settings
 from app.models.schemas import SearchResponse, ErrorDetail
 from app.search.query import build_search_request
-from app.search.executor import execute_search, get_game_by_hash, build_similarity_query
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -70,8 +69,8 @@ async def search(
             ).model_dump(),
         )
 
-    es = request.app.state.es
-    response = await execute_search(es, es_request)
+    search_backend = request.app.state.search_backend
+    response = await search_backend.execute_search(es_request)
 
     log.info(
         "search_complete", query=q, total=response.total, returned=len(response.results)
@@ -84,8 +83,8 @@ async def search(
     summary="Get a single game by its hash",
 )
 async def get_game(request: Request, game_hash: str):
-    es = request.app.state.es
-    game = await get_game_by_hash(es, game_hash)
+    search_backend = request.app.state.search_backend
+    game = await search_backend.get_game_by_hash(game_hash)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     return game
@@ -94,8 +93,8 @@ async def get_game(request: Request, game_hash: str):
 @router.get("/games/{game_hash}/similar", summary="Get similar games from its hash")
 @limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
 def find_similar(request: Request, game_hash: str):
-    es = request.app.state.es
-    results = build_similarity_query(es, game_hash)
+    search_backend = request.app.state.search_backend
+    results = search_backend.build_similarity_query(game_hash)
     if not results:
         raise HTTPException(status_code=404, detail="No similar games found")
     return results

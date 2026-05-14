@@ -16,7 +16,7 @@ import structlog
 
 from app.config import settings
 from app.logging_config import configure_logging
-from app.search.index import get_es_client, setup_index
+from app.search.elasticsearch_backend import ElasticsearchSearchBackend
 from app.models.schemas import ErrorDetail
 
 configure_logging()
@@ -29,12 +29,12 @@ limiter = Limiter(key_func=get_remote_address)
 async def lifespan(app: FastAPI):
     # Startup
     log.info("startup", env=settings.ENV, es_host=settings.ES_HOST)
-    es = get_es_client()
-    setup_index(es)
-    app.state.es = es
+    search_backend = ElasticsearchSearchBackend()
+    search_backend.setup()
+    app.state.search_backend = search_backend
     yield
     # Shutdown
-    es.close()
+    search_backend.close()
     log.info("shutdown")
 
 
@@ -94,14 +94,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health():
-    """Liveness check — also verifies ES connection."""
-    es = app.state.es
-    cluster = es.cluster.health()
-    return {
-        "status": "ok",
-        "es_status": cluster["status"],
-        "index": settings.ES_INDEX_ALIAS,
-    }
+    """Liveness check — also verifies search backend connection."""
+    backend_health = app.state.search_backend.health()
+    return {"status": "ok", **backend_health}
 
 
 # Search router registered here — implemented in api/search.py
