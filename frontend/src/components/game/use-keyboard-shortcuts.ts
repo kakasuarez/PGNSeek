@@ -25,4 +25,3 @@ export function useKeyboardShortcuts(callback: () => void, keyCodes: string[]): 
 		};
 	}, []);
 }
-}
