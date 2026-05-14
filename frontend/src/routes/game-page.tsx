@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { BoardViewer } from "@/components/game/board-viewer";
 import { GameHeader } from "@/components/game/game-header";
 import { Card } from "@/components/ui/card";
@@ -14,16 +14,17 @@ export function GamePage() {
     queryFn: () => fetchGame(gameHash),
     enabled: Boolean(gameHash),
   });
+  const navigate = useNavigate();
 
   return (
     <div className="space-y-5">
-      <Link
-        to="/"
+      <button
+        onClick={() => {navigate(-1);}}
         className="inline-flex items-center gap-2 text-sm text-[var(--muted)] transition hover:text-white"
       >
         <ArrowLeft className="h-4 w-4" />
         Back to search
-      </Link>
+      </button>
 
       {gameQuery.isLoading ? (
         <Card className="rounded-xl border-white/8 bg-[var(--panel)] px-5 py-10 text-sm text-[var(--muted)]">
