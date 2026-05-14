@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     DEFAULT_PAGE_SIZE: int = 20
     MAX_PAGE_SIZE: int = 100
     RATE_LIMIT_PER_MINUTE: int = 60
+    ALLOWED_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     # Caching
     CACHE_TTL_SECONDS: int = 300
@@ -45,6 +46,14 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
     ENV: str = "development"
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.ALLOWED_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
     @field_validator("LOG_LEVEL")
     @classmethod
