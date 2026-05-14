@@ -4,7 +4,7 @@ app/api/search.py
 Search endpoint. Two routes:
   GET /api/v1/search   — main search with query string + optional filters
   GET /api/v1/games/{game_hash}  — retrieve a single game by hash
-  GET /api/v1/similar/{game_hash} — find similar games
+  GET /api/v1/games/{game_hash}/similar — find similar games
 
 The query string is processed by the three-stage pipeline in app/search/query.py.
 """
@@ -91,7 +91,7 @@ async def get_game(request: Request, game_hash: str):
     return game
 
 
-@router.get("/games/similar/{game_hash}", summary="Get similar games from its hash")
+@router.get("/games/{game_hash}/similar", summary="Get similar games from its hash")
 @limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
 def find_similar(request: Request, game_hash: str):
     es = request.app.state.es

@@ -313,7 +313,7 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
         "year": year,
         "eco": eco,
         "eco_prefix": eco_prefix,
-        "opening_name": eco_to_opening[eco],
+        "opening_name": eco_to_opening.get(eco),
         "event": h.get("Event", None),
         "site": h.get("Site", None),
         "source_file": source_file,

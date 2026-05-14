@@ -65,7 +65,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_handler)  # type: ignore
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173"],  # Vite dev server
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["GET"],
     allow_headers=["*"],

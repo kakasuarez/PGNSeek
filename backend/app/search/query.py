@@ -289,7 +289,11 @@ def build_search_request(
             "pgn_moves",
             "endgame_type"
         ],
-        debug_tokens={"raw_query": query_string},
+        debug_tokens={
+            "raw_query": query_string,
+            "pattern_tokens": pattern_tokens,
+            "keyword_tokens": keyword_tokens,
+        },
         debug_filter=clauses["filter"],
         debug_must=clauses["must"],
         debug_should=clauses["should"],

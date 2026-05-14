@@ -225,13 +225,14 @@ This document is the authoritative record of every significant design decision m
 
 ## 3. API Layer
 
-### 3.1 API contract: two endpoints, versioned under /api/v1
+### 3.1 API contract: three endpoints, versioned under /api/v1
 
-**Decision:** The public API has exactly two endpoints, and they will not change shape without a version bump to `/api/v2`.
+**Decision:** The public API has exactly three endpoints, and they will not change shape without a version bump to `/api/v2`.
 
-```
+```http
 GET /api/v1/search?q=<string>&page_size=<int>&cursor=<token>
 GET /api/v1/games/<game_hash>
+GET /api/v1/games/<game_hash>/similar
 GET /health   (unversioned — infrastructure concern)
 ```
 
