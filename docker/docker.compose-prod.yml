@@ -1,0 +1,45 @@
+services:
+  elasticsearch:
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: pgnseek_es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms300m -Xmx300m    # reduced for free tier
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    restart: unless-stopped
+    networks:
+      - pgnseek_net
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: pgnseek_backend
+    environment:
+      - ES_HOST=http://elasticsearch:9200
+      - ENV=production
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:4173}
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pgnseek_net
+
+volumes:
+  es_data:
+
+networks:
+  pgnseek_net:
+    driver: bridge
