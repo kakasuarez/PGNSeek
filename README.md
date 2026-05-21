@@ -1,5 +1,7 @@
 # PGNSeek - Search chess games using natural language
 
+![Demo](./pgnseek_demo.gif)
+
 ## Features
 
 - Natural language search across chess games.
