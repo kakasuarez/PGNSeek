@@ -1,0 +1,15 @@
+.git
+.vscode
+
+backend/venv
+backend/.venv
+backend/__pycache__
+backend/**/*.pyc
+backend/tests
+
+frontend
+data
+debug
+
+__pycache__
+*.pyc
