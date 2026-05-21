@@ -96,4 +96,8 @@ export async function fetchGame(gameHash: string) {
   return fetchJson<GameResult>(`/api/v1/games/${gameHash}`);
 }
 
+export async function fetchSimilarGames(gameHash: string) {
+  return fetchJson<GameResult[]>(`/api/v1/games/${gameHash}/similar`);
+}
+
 export { API_URL };

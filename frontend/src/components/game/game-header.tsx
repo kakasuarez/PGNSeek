@@ -1,4 +1,7 @@
+import { Link } from "react-router-dom";
+import { Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { GameResult } from "@/lib/api";
 import {
@@ -14,7 +17,7 @@ export function GameHeader({ game }: { game: GameResult }) {
   return (
     <Card className="rounded-xl border-white/8 bg-[rgba(16,22,29,0.92)] p-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <div className="text-xl font-semibold text-white">
             {game.opening_name || "Unknown opening"}
           </div>
@@ -27,11 +30,20 @@ export function GameHeader({ game }: { game: GameResult }) {
             {game.event || "Unknown event"}
           </div>
         </div>
-        <div className="text-right text-sm text-[var(--muted)]">
-          <div className="text-base font-semibold text-[var(--accent)]">
-            {game.eco || "ECO?"}
+        <div className="flex flex-col items-start gap-3 text-sm text-[var(--muted)] sm:items-end">
+          <div className="text-left sm:text-right">
+            <div className="text-base font-semibold text-[var(--accent)]">
+              {game.eco || "ECO?"}
+            </div>
+            <div className="mt-1">Hash: {game.game_hash.slice(0, 12)}</div>
           </div>
-          <div className="mt-1">Hash: {game.game_hash.slice(0, 12)}</div>
+          <Link
+            to={`/game/${game.game_hash}/similar`}
+            className={buttonVariants({ variant: "secondary", size: "sm" })}
+          >
+            <Search className="h-4 w-4" />
+            Find similar games
+          </Link>
         </div>
       </div>
 

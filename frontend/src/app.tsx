@@ -2,6 +2,7 @@ import { createBrowserRouter, Outlet } from "react-router-dom";
 import { SearchPage } from "@/routes/search-page";
 import { GamePage } from "@/routes/game-page";
 import { ReviewPage } from "@/routes/review-page";
+import { SimilarGamesPage } from "@/routes/similar-games-page";
 
 function RootLayout() {
   return (
@@ -48,6 +49,7 @@ export const router = createBrowserRouter([
     element: <RootLayout />,
     children: [
       { index: true, element: <SearchPage /> },
+      { path: "game/:hash/similar", element: <SimilarGamesPage /> },
       { path: "game/:hash", element: <GamePage /> },
       { path: "review", element: <ReviewPage /> },
     ],
