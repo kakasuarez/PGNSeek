@@ -2,7 +2,7 @@
 
 **Project:** PGNSeek — natural language search across millions of chess games  
 **Status:** Active  
-**Last updated:** 2026-04-18
+**Last updated:** 2026-06-30
 
 This document is the authoritative record of every significant design decision made during the project. Before changing anything recorded here, update this document first and note the reason. Each decision includes the context, the choice made, the alternatives considered, and the consequences of changing it later.
 
@@ -290,9 +290,10 @@ pgnseek/
   backend/
     app/
       api/          ← FastAPI route handlers
+      api/schemas.py ← shared API response envelopes
       search/       ← query pipeline, ES index management, executor
+      search/schemas.py ← search API contract models
       ingestion/    ← PGN parser, feature extractor, bulk indexer
-      models/       ← Pydantic schemas (API contract)
     tests/
     Dockerfile
     requirements.txt
@@ -309,7 +310,7 @@ pgnseek/
 
 **Key rule:** `pipeline/ingest.py` imports directly from `backend/app/`. There is no code duplication between the ingestion CLI and the API server. The pipeline and the API share the same `config.py`, `index.py`, and `ingestion/pipeline.py`.
 
-**Consequences of reversing (splitting into multiple repos):** The shared import path breaks. Config, models, and ingestion logic must be duplicated or extracted into a shared package.
+**Consequences of reversing (splitting into multiple repos):** The shared import path breaks. Config, schemas, and ingestion logic must be duplicated or extracted into a shared package.
 
 ---
 
@@ -376,6 +377,7 @@ These are explicitly not decided yet. They are recorded here so they are not for
 
 | Date | Section | Change | Reason |
 |---|---|---|---|
+| 2026-06-30 | Structure | Move Pydantic schemas into API/search feature modules | Keep code organized by responsibility |
 | 2026-04-25 | Index | Add feature vector | Similarity search |
 | 2026-04-18 | Index | Add PGN moves | Debugging and final result |
 | 2026-04-14 | Index | Add endgame type | Improve endgame detection |
