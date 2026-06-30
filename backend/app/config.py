@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     CACHE_TTL_SECONDS: int = 300
     CACHE_MAX_SIZE: int = 1000
 
+    # Engine / opening review
+    STOCKFISH_PATH: str | None = None
+    OPENING_REVIEW_ENGINE_DEPTH: int = 12
+
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
@@ -68,6 +72,13 @@ class Settings(BaseSettings):
     def validate_env(cls, v: str) -> str:
         if v not in {"development", "production"}:
             raise ValueError("ENV must be 'development' or 'production'")
+        return v
+
+    @field_validator("OPENING_REVIEW_ENGINE_DEPTH")
+    @classmethod
+    def validate_opening_review_engine_depth(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("OPENING_REVIEW_ENGINE_DEPTH must be >= 1")
         return v
 
     class Config:
