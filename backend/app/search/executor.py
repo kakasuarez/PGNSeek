@@ -17,7 +17,7 @@ import structlog
 
 from app.config import settings
 from app.search.query import ESSearchRequest
-from app.models.schemas import (
+from app.search.schemas import (
     SearchResponse,
     GameResult,
     Aggregations,

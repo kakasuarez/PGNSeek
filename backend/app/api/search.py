@@ -16,7 +16,8 @@ from slowapi.util import get_remote_address
 import structlog
 
 from app.config import settings
-from app.models.schemas import SearchResponse, ErrorDetail
+from app.api.schemas import ErrorDetail
+from app.search.schemas import SearchResponse
 from app.search.query import build_search_request
 from app.search.executor import execute_search, get_game_by_hash, build_similarity_query
 

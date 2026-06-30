@@ -17,7 +17,7 @@ import structlog
 from app.config import settings
 from app.logging_config import configure_logging
 from app.search.index import get_es_client, setup_index
-from app.models.schemas import ErrorDetail
+from app.api.schemas import ErrorDetail
 
 configure_logging()
 log = structlog.get_logger()
