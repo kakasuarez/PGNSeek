@@ -36,7 +36,7 @@ class AnalysisScore(BaseModel):
 
 
 class AnalysisResult(BaseModel):
-    source: Literal["local_stockfish"]
+    source: Literal["lichess_cloud", "local_stockfish"]
     depth: int
     score: AnalysisScore
     score_value: int | None = None

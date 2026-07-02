@@ -22,13 +22,10 @@ log = structlog.get_logger()
 router = APIRouter()
 
 
-# @router.get("/review/debug/cache")
-# async def review_cache_debug(request: Request):
+# @router.get("/review/debug/counts")
+# async def review_analysis_counts(request: Request):
 #     service = request.app.state.analysis_service
-#     return {
-#         key: value.model_dump() if value is not None else None
-#         for key, value in service.cache.items()
-#     }
+#     return service.analysis_counts
 
 
 @router.get("/review/{job_id}")

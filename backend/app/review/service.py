@@ -5,6 +5,7 @@ Opening review service.
 """
 
 import chess
+import structlog
 from collections import Counter
 from typing import Any
 from chess.pgn import Game
@@ -14,12 +15,8 @@ from app.review.analyzers.chain import AnalysisChain
 from app.review.analyzers.cloud import CloudAnalyzer
 from app.review.analyzers.local import LocalAnalyzer
 
-# def process_review(job: ReviewJob):
-#     source: ReviewSource = create_source(job)
-#     for game in source.iter_games():
-#         if not game:
-#             break
-#         # TODO: Review `game` here.
+
+log = structlog.get_logger()
 
 
 class AnalyzerService:
@@ -33,6 +30,13 @@ class AnalyzerService:
             [CloudAnalyzer(), LocalAnalyzer(depth=settings.OPENING_REVIEW_ENGINE_DEPTH)]
         )
         self.cache = dict()
+        self.analysis_counts = {
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "no_result": 0,
+            "by_source": {"lichess_cloud": 0, "local_stockfish": 0},
+        }
+        log.info("review_analyzer_service_initialized", max_plies=self.max_plies)
 
     def _normalize_fen(self, board: chess.Board) -> str:
         ep_square = (
@@ -54,23 +58,43 @@ class AnalyzerService:
         root_key = ",".join(move.uci() for move in root_moves or [])
         cache_key = f"{fen}|{root_key}"
         if cache_key in self.cache:
+            self.analysis_counts["cache_hits"] += 1
+            log.debug("review_analysis_cache_hit", fen=fen, root_moves=root_key)
             return self.cache[cache_key]
-        self.cache[cache_key] = await self.analyzer_chain.analyze(
+        self.analysis_counts["cache_misses"] += 1
+        log.debug("review_analysis_cache_miss", fen=fen, root_moves=root_key)
+        result = await self.analyzer_chain.analyze(
             board, root_moves=root_moves
         )
+        self.cache[cache_key] = result
+        if result is None:
+            self.analysis_counts["no_result"] += 1
+            log.warning("review_analysis_no_result", fen=fen, root_moves=root_key)
+        else:
+            self.analysis_counts["by_source"][result.source] += 1
+            log.info(
+                "review_analysis_complete",
+                source=result.source,
+                fen=fen,
+                root_moves=root_key,
+                best_move=result.best_move_uci,
+            )
         return self.cache.get(cache_key)
 
     async def analyze_game(self, game: Game | None, player: str) -> dict[str, Any] | None:
         if game is None:
+            log.warning("review_game_missing")
             return None
         white = game.headers.get("White", "")
         black = game.headers.get("Black", "")
+        log.info("review_game_started", player=player, white=white, black=black)
         player_color = None
         if white == player:
             player_color = chess.WHITE
         if black == player:
             player_color = chess.BLACK
         if player_color is None:
+            log.info("review_game_skipped_player_not_found", player=player, white=white, black=black)
             return None
 
         buckets: dict[str, dict[str, Any]] = {}
@@ -99,6 +123,13 @@ class AnalyzerService:
             board.push(move)
             node = next_node
             ply += 1
+
+        log.info(
+            "review_game_bucketed",
+            player=player,
+            positions_seen=sum(bucket["occurrences"] for bucket in buckets.values()),
+            unique_positions=len(buckets),
+        )
 
         positions: list[dict[str, Any]] = []
         for fen, bucket in buckets.items():
@@ -170,7 +201,7 @@ class AnalyzerService:
             )
 
         mistakes.sort(key=lambda item: (-item["occurrences"], item["fen"]))
-        return {
+        report = {
             "summary": {
                 "positions_seen": sum(item["occurrences"] for item in positions),
                 "unique_positions": len(positions),
@@ -179,3 +210,5 @@ class AnalyzerService:
             "positions": positions,
             "mistakes": mistakes,
         }
+        log.info("review_game_completed", player=player, **report["summary"])
+        return report

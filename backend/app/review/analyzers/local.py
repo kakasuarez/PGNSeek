@@ -1,9 +1,13 @@
+import structlog
+
 import chess
 import chess.engine
 
 from app.config import settings
 from app.review.analyzers.base import GameAnalyzer
 from app.review.schemas import AnalysisResult, AnalysisScore
+
+log = structlog.get_logger()
 
 
 class LocalAnalyzer(GameAnalyzer):
@@ -14,8 +18,10 @@ class LocalAnalyzer(GameAnalyzer):
 
     def _engine(self) -> chess.engine.SimpleEngine | None:
         if not self.engine_path:
+            log.warning("review_local_no_engine_path")
             return None
         if self.engine is None:
+            log.info("review_local_engine_start", path=self.engine_path)
             self.engine = chess.engine.SimpleEngine.popen_uci(self.engine_path)
         return self.engine
 
@@ -49,6 +55,12 @@ class LocalAnalyzer(GameAnalyzer):
         if engine is None:
             return None
 
+        log.debug(
+            "review_local_analysis",
+            fen=board.fen(),
+            depth=self.depth,
+            root_moves=[m.uci() for m in root_moves] if root_moves else None,
+        )
         info = engine.analyse(
             board,
             chess.engine.Limit(depth=self.depth),
