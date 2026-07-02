@@ -9,7 +9,9 @@ import structlog
 import tempfile
 import shutil
 from pathlib import Path
-from fastapi import UploadFile, Form, APIRouter, Request, Form
+from uuid import UUID
+
+from fastapi import UploadFile, Form, APIRouter, Request, HTTPException
 
 from app.review.schemas import (
     UploadSourceConfig,
@@ -18,6 +20,23 @@ from app.review.schemas import (
 
 log = structlog.get_logger()
 router = APIRouter()
+
+
+# @router.get("/review/debug/cache")
+# async def review_cache_debug(request: Request):
+#     service = request.app.state.analysis_service
+#     return {
+#         key: value.model_dump() if value is not None else None
+#         for key, value in service.cache.items()
+#     }
+
+
+@router.get("/review/{job_id}")
+async def review_status(request: Request, job_id: UUID):
+    status = request.app.state.review_queue.get_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Review job not found")
+    return {"job_id": job_id, **status}
 
 
 @router.post(
@@ -38,7 +57,9 @@ async def review(request: Request, pgn_file: UploadFile, player: str = Form()):
         shutil.copyfileobj(pgn_file.file, temp_file)
         job = ReviewJob(
             source="upload",
-            source_config=UploadSourceConfig(temp_file=str(Path(temp_file.name)), player=player),
+            source_config=UploadSourceConfig(
+                temp_file=str(Path(temp_file.name)), player=player
+            ),
         )
         await review_queue.enqueue(job)
         return {"status": "queued", "job_id": job.job_id}

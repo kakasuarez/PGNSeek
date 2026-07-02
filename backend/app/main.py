@@ -21,6 +21,7 @@ from app.search.index import get_es_client, setup_index
 from app.api.schemas import ErrorDetail
 from app.review.worker import worker
 from app.review.queue import ReviewQueue
+from app.review.service import AnalyzerService
 
 configure_logging()
 log = structlog.get_logger()
@@ -36,8 +37,10 @@ async def lifespan(app: FastAPI):
     setup_index(es)
     app.state.es = es
     queue = ReviewQueue()
+    analysis_service = AnalyzerService()
     app.state.review_queue = queue
-    worker_task = asyncio.create_task(worker(queue))
+    app.state.analysis_service = analysis_service
+    worker_task = asyncio.create_task(worker(queue, analysis_service))
     yield
     # Shutdown
     worker_task.cancel()
