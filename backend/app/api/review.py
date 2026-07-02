@@ -38,7 +38,7 @@ async def review(request: Request, pgn_file: UploadFile, player: str = Form()):
         shutil.copyfileobj(pgn_file.file, temp_file)
         job = ReviewJob(
             source="upload",
-            source_config=UploadSourceConfig(temp_file=str(Path(temp_file.name))),
+            source_config=UploadSourceConfig(temp_file=str(Path(temp_file.name)), player=player),
         )
         await review_queue.enqueue(job)
         return {"status": "queued", "job_id": job.job_id}

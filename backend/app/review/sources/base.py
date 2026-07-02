@@ -4,6 +4,15 @@ from chess.pgn import Game
 
 
 class ReviewSource(ABC):
+
+    @property
+    @abstractmethod
+    def player(self) -> str:
+        """
+        Return the player name for which to review the games.
+        """
+        pass
+
     @abstractmethod
     def iter_games(self) -> Generator[Game | None, Any, Any]:
         """

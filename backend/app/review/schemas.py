@@ -13,6 +13,7 @@ from typing import Literal
 
 class UploadSourceConfig(BaseModel):
     temp_file: str
+    player: str
 
 
 # ── Reviews ──────────────────────────────────────────────────────────────
@@ -24,3 +25,19 @@ class ReviewJob(BaseModel):
     source_config: (
         UploadSourceConfig  # later union with other SourceConfig e.g. Lichess
     )
+
+
+# ── Analyis ──────────────────────────────────────────────────────────────
+
+
+class AnalysisScore(BaseModel):
+    cp: int | None = None
+    mate: int | None = None
+
+
+class AnalysisResult(BaseModel):
+    source: Literal["local_stockfish"]
+    depth: int
+    score: AnalysisScore
+    score_value: int | None = None
+    best_move_uci: str | None = None

@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     # Engine / opening review
     STOCKFISH_PATH: str | None = None
     OPENING_REVIEW_ENGINE_DEPTH: int = 12
+    OPENING_REVIEW_MAX_PLIES: int = 20
 
     # Logging
     LOG_LEVEL: str = "INFO"
