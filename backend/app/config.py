@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     STOCKFISH_PATH: str | None = None
     OPENING_REVIEW_ENGINE_DEPTH: int = 12
     OPENING_REVIEW_MAX_PLIES: int = 20
+    LOCAL_TIMEOUT_SECONDS: float = 30.0 
+    CLOUD_TIMEOUT_SECONDS: float = 10.0
 
     # Logging
     LOG_LEVEL: str = "INFO"

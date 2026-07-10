@@ -66,7 +66,7 @@ class LocalAnalyzer(GameAnalyzer):
         info = await asyncio.to_thread(
             engine.analyse,
             board,
-            chess.engine.Limit(depth=self.depth, time=60.0),
+            chess.engine.Limit(depth=self.depth, time=settings.LOCAL_TIMEOUT_SECONDS),
             root_moves=root_moves,
         )
         pv = info.get("pv", [])

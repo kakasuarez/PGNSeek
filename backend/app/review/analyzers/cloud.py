@@ -10,6 +10,7 @@ from berserk.exceptions import BerserkError
 
 from app.review.analyzers.base import GameAnalyzer
 from app.review.schemas import AnalysisResult, AnalysisScore
+from app.config import settings
 
 log = structlog.get_logger()
 
@@ -28,7 +29,7 @@ class CloudAnalyzer(GameAnalyzer):
         try:
             evaluation = await asyncio.wait_for(
                 asyncio.to_thread(self.client.get_cloud_evaluation, board.fen()),
-                timeout=10.0,
+                timeout=settings.CLOUD_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
             log.debug("review_cloud_timeout")
