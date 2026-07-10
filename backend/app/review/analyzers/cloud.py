@@ -1,3 +1,5 @@
+import asyncio
+
 import structlog
 
 import chess
@@ -24,7 +26,13 @@ class CloudAnalyzer(GameAnalyzer):
             return None
 
         try:
-            evaluation = self.client.get_cloud_evaluation(board.fen())
+            evaluation = await asyncio.wait_for(
+                asyncio.to_thread(self.client.get_cloud_evaluation, board.fen()),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            log.debug("review_cloud_timeout")
+            return None
         except (BerserkError, requests.RequestException):
             log.debug("review_cloud_miss")
             return None

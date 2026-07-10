@@ -1,3 +1,5 @@
+import asyncio
+
 import structlog
 
 import chess
@@ -14,16 +16,16 @@ class LocalAnalyzer(GameAnalyzer):
     def __init__(self, depth: int, engine_path: str | None = settings.STOCKFISH_PATH):
         self.depth = depth
         self.engine_path = engine_path
-        self.engine: chess.engine.SimpleEngine | None = None
+        self._engine: chess.engine.SimpleEngine | None = None
 
-    def _engine(self) -> chess.engine.SimpleEngine | None:
+    def _start_engine(self) -> chess.engine.SimpleEngine | None:
         if not self.engine_path:
             log.warning("review_local_no_engine_path")
             return None
-        if self.engine is None:
+        if self._engine is None:
             log.info("review_local_engine_start", path=self.engine_path)
-            self.engine = chess.engine.SimpleEngine.popen_uci(self.engine_path)
-        return self.engine
+            self._engine = chess.engine.SimpleEngine.popen_uci(self.engine_path)
+        return self._engine
 
     def _score_to_result(self, score: chess.engine.Score | None) -> AnalysisScore:
         if score is None:
@@ -51,7 +53,7 @@ class LocalAnalyzer(GameAnalyzer):
     async def analyze(
         self, board: chess.Board, root_moves: list[chess.Move] | None = None
     ) -> AnalysisResult | None:
-        engine = self._engine()
+        engine = self._start_engine()
         if engine is None:
             return None
 
@@ -61,9 +63,10 @@ class LocalAnalyzer(GameAnalyzer):
             depth=self.depth,
             root_moves=[m.uci() for m in root_moves] if root_moves else None,
         )
-        info = engine.analyse(
+        info = await asyncio.to_thread(
+            engine.analyse,
             board,
-            chess.engine.Limit(depth=self.depth),
+            chess.engine.Limit(depth=self.depth, time=60.0),
             root_moves=root_moves,
         )
         pv = info.get("pv", [])
