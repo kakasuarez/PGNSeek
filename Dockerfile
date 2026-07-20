@@ -10,6 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	curl \
 	&& rm -rf /var/lib/apt/lists/*
 
+# Download Stockfish binary
+RUN curl -L https://github.com/official-stockfish/Stockfish/releases/download/sf_16.1/stockfish-ubuntu-x86-64-avx2.tar -o stockfish.tar \
+    && tar -xf stockfish.tar \
+    && mv stockfish/stockfish-ubuntu-x86-64-avx2 /usr/local/bin/stockfish \
+    && chmod +x /usr/local/bin/stockfish \
+    && rm -rf stockfish.tar stockfish
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
