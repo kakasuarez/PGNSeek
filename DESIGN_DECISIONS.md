@@ -382,3 +382,38 @@ These are explicitly not decided yet. They are recorded here so they are not for
 | 2026-04-18 | Index | Add PGN moves | Debugging and final result |
 | 2026-04-14 | Index | Add endgame type | Improve endgame detection |
 | 2026-04-05 | All | Initial document created | Project kickoff |
+| 2026-07-20 | Data Layer | Migrated from Elasticsearch to MongoDB Atlas | Move to a single datastore capable of full-text search, vector search, and document storage, while reducing operational complexity. |
+
+---
+
+## 6. MongoDB Atlas Vector Search Configuration
+
+As part of the migration to MongoDB, the Elasticsearch dense vector fields were replaced with MongoDB Atlas Vector Search. The index must be manually created in the Atlas UI to enable similarity queries.
+
+**Index Name:** `feature_vector_index` (Must match the name used in `$vectorSearch`)
+**Collection:** `chess_games`
+
+**JSON Definition:**
+```json
+{
+  "fields": [
+    {
+      "type": "vector",
+      "path": "feature_vector",
+      "numDimensions": 19,
+      "similarity": "cosine"
+    },
+    {
+      "type": "filter",
+      "path": "_id"
+    }
+  ]
+}
+```
+
+**Instructions:**
+1. Open your cluster in MongoDB Atlas.
+2. Navigate to **Atlas Search** -> **Create Search Index**.
+3. Choose **JSON Editor**.
+4. Select the `chess_games` collection, name the index `feature_vector_index`.
+5. Paste the JSON definition above and create the index.

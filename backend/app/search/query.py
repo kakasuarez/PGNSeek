@@ -213,13 +213,12 @@ def resolve_intent(tokens: dict) -> dict:
 
 
 @dataclass
-class ESSearchRequest:
-    """Everything needed to execute one ES search."""
+class SearchRequest:
+    """Everything needed to execute one Mongo search."""
 
     query: dict[str, Any]
-    aggs: dict[str, Any]
     sort: list[dict]
-    search_after: list | None
+    search_after: str | None
     size: int
     source_fields: list[str]
     debug_tokens: dict[str, Any]
@@ -232,42 +231,79 @@ def build_search_request(
     query_string: str,
     page_size: int = 20,
     cursor: str | None = None,
-) -> ESSearchRequest:
+) -> SearchRequest:
     """
     Entry point for the query pipeline.
-    Returns a fully-formed ESSearchRequest ready for execute_search().
-
+    Returns a fully-formed SearchRequest ready for execute_search().
     """
     pattern_tokens = extract_patterns(query_string)
     keyword_tokens = extract_keywords(query_string)
     tokens = {**pattern_tokens, **keyword_tokens}
     clauses = resolve_intent(tokens)
-    decoded_cursor = None
-    if cursor:
-        try:
-            decoded_cursor = json.loads(base64.urlsafe_b64decode(cursor.encode()))
-        except Exception:
-            decoded_cursor = None
+    
+    mongo_filter = {}
+    and_conditions = []
+    text_queries = set()
+    
+    def translate_clause(c):
+        if "match" in c:
+            for field, val in c["match"].items():
+                query_str = val["query"] if isinstance(val, dict) else val
+                text_queries.add(query_str)
+            return None
+        elif "term" in c:
+            for field, val in c["term"].items():
+                return {field: val}
+        elif "range" in c:
+            for field, val in c["range"].items():
+                range_cond = {}
+                if "gte" in val: range_cond["$gte"] = val["gte"]
+                if "lte" in val: range_cond["$lte"] = val["lte"]
+                return {field: range_cond}
+        elif "bool" in c:
+            if "should" in c["bool"]:
+                or_conds = []
+                for sc in c["bool"]["should"]:
+                    if "bool" in sc and "must" in sc["bool"]:
+                        inner_and = []
+                        for ic in sc["bool"]["must"]:
+                            tc = translate_clause(ic)
+                            if tc: inner_and.append(tc)
+                        if inner_and:
+                            or_conds.append({"$and": inner_and} if len(inner_and) > 1 else inner_and[0])
+                if or_conds:
+                    return {"$or": or_conds}
+        return None
 
-    return ESSearchRequest(
-        query={
-            "bool": {
-                "must": clauses["must"] or [{"match_all": {}}],
-                "should": clauses["should"],
-                "filter": clauses["filter"],
-                "must_not": clauses["must_not"],
-            }
-        },
-        aggs={
-            "openings": {"terms": {"field": "opening_name.keyword", "size": 10}},
-            "results": {"terms": {"field": "result", "size": 3}},
-            "years": {
-                "terms": {"field": "year", "size": 10, "order": {"_key": "desc"}}
-            },
-            "eco_categories": {"terms": {"field": "eco_prefix", "size": 5}},
-        },
-        sort=[{"avg_rating": "desc"}, {"game_hash": "asc"}],
-        search_after=decoded_cursor,
+    for c in clauses["must"]:
+        tc = translate_clause(c)
+        if tc: and_conditions.append(tc)
+        
+    for c in clauses["filter"]:
+        tc = translate_clause(c)
+        if tc: and_conditions.append(tc)
+
+    if clauses["should"]:
+        should_conds = []
+        for c in clauses["should"]:
+            tc = translate_clause(c)
+            if tc: should_conds.append(tc)
+        if should_conds:
+            and_conditions.append({"$or": should_conds})
+
+    if text_queries:
+        and_conditions.append({"$text": {"$search": " ".join(text_queries)}})
+        
+    if and_conditions:
+        if len(and_conditions) == 1:
+            mongo_filter = and_conditions[0]
+        else:
+            mongo_filter = {"$and": and_conditions}
+
+    return SearchRequest(
+        query=mongo_filter,
+        sort=[{"avg_rating": -1}, {"_id": 1}],
+        search_after=cursor,
         size=page_size,
         source_fields=[
             "game_hash",

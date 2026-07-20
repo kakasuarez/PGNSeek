@@ -9,7 +9,7 @@ Search endpoint. Two routes:
 The query string is processed by the three-stage pipeline in app/search/query.py.
 """
 
-from fastapi import APIRouter, Request, Query, HTTPException
+from fastapi import APIRouter, Request, Query, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -19,7 +19,9 @@ from app.config import settings
 from app.api.schemas import ErrorDetail
 from app.search.schemas import SearchResponse
 from app.search.query import build_search_request
-from app.search.executor import execute_search, get_game_by_hash, build_similarity_query
+from app.search.mongo_executor import execute_search, get_game_by_hash, build_similarity_query
+from app.db import get_db
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -53,6 +55,7 @@ async def search(
         default=None,
         description="Pagination cursor from previous response (opaque token)",
     ),
+    db: AsyncIOMotorDatabase = Depends(get_db)
 ):
     log.info(
         "search_request", query=q, page_size=page_size, has_cursor=cursor is not None
@@ -71,8 +74,7 @@ async def search(
             ).model_dump(),
         )
 
-    es = request.app.state.es
-    response = await execute_search(es, es_request)
+    response = await execute_search(db, es_request)
 
     log.info(
         "search_complete", query=q, total=response.total, returned=len(response.results)
@@ -84,9 +86,8 @@ async def search(
     "/games/{game_hash}",
     summary="Get a single game by its hash",
 )
-async def get_game(request: Request, game_hash: str):
-    es = request.app.state.es
-    game = await get_game_by_hash(es, game_hash)
+async def get_game(game_hash: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+    game = await get_game_by_hash(db, game_hash)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     return game
@@ -94,9 +95,8 @@ async def get_game(request: Request, game_hash: str):
 
 @router.get("/games/{game_hash}/similar", summary="Get similar games from its hash")
 @limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
-def find_similar(request: Request, game_hash: str):
-    es = request.app.state.es
-    results = build_similarity_query(es, game_hash)
+async def find_similar(request: Request, game_hash: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+    results = await build_similarity_query(db, game_hash)
     if not results:
         raise HTTPException(status_code=404, detail="No similar games found")
     return results

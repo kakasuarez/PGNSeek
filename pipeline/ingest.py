@@ -19,9 +19,10 @@ _backend = Path(__file__).parent.parent / "backend"
 if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
 
+import asyncio
+from motor.motor_asyncio import AsyncIOMotorClient
 from app.config import settings
 from app.logging_config import configure_logging
-from app.search.index import get_es_client, setup_index
 from app.ingestion.pipeline import run_pipeline, load_state, clear_state
 
 configure_logging()
@@ -67,9 +68,9 @@ def main() -> None:
         print("Clearing ingestion state...")
         clear_state()
 
-    es = get_es_client()
-    setup_index(es)
-    run_pipeline(es)
+    client = AsyncIOMotorClient(settings.MONGODB_URI)
+    db = client[settings.MONGODB_DB]
+    asyncio.run(run_pipeline(db))
 
 
 if __name__ == "__main__":
