@@ -16,12 +16,17 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    # Elasticsearch
-    ES_HOST: str = "http://localhost:9200"
-    ES_INDEX: str = "chess_games"
-    ES_INDEX_ALIAS: str = "chess_games"
-    ES_BULK_BATCH_SIZE: int = 500
-    ES_MAX_RESULT_WINDOW: int = 10000
+    # MongoDB
+    MONGODB_URI: str
+    MONGODB_DB: str = "pgnseek"
+    
+    # Redis
+    REDIS_URL: str = "redis://localhost:6379/0"
+
+    # Supabase Storage
+    SUPABASE_URL: str = ""
+    SUPABASE_KEY: str = ""
+    SUPABASE_BUCKET: str = "pgn-uploads"
 
     # Ingestion
     PGN_DATA_DIR: str = "./data/pgn"
