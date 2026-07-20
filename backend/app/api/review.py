@@ -36,6 +36,21 @@ async def review_status(request: Request, job_id: UUID):
     return {"job_id": job_id, **status}
 
 
+@router.get("/review/{job_id}/reports")
+async def review_reports(request: Request, job_id: UUID):
+    status = request.app.state.review_queue.get_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Review job not found")
+    if status.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Review job is not completed yet")
+    
+    reports = request.app.state.review_queue.get_reports(job_id)
+    if reports is None:
+        raise HTTPException(status_code=404, detail="Reports not found for this job")
+        
+    return {"job_id": job_id, "reports": reports}
+
+
 @router.post(
     "/review",
     summary="Run opening review on a PGN file",
