@@ -1,0 +1,60 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: pgnseek_redis_prod
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - pgnseek_net
+
+  backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: pgnseek_backend
+    environment:
+      - ENV=production
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:4173}
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - pgnseek_shared_tmp:/app/data/tmp
+    restart: unless-stopped
+    networks:
+      - pgnseek_net
+
+  celery_worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: pgnseek_celery_prod
+    environment:
+      - ENV=production
+      - REDIS_URL=redis://redis:6379/0
+      - STOCKFISH_PATH=/usr/local/bin/stockfish
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - pgnseek_shared_tmp:/app/data/tmp
+    restart: unless-stopped
+    networks:
+      - pgnseek_net
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+
+networks:
+  pgnseek_net:
+    driver: bridge
+
+volumes:
+  pgnseek_shared_tmp:

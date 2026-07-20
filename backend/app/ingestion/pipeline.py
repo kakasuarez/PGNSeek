@@ -35,12 +35,11 @@ from typing import Generator
 
 import chess
 import chess.pgn
-from elasticsearch import Elasticsearch
-from elasticsearch.helpers import bulk
+from pymongo import ReplaceOne
+from motor.motor_asyncio import AsyncIOMotorDatabase
 import structlog
 
 from app.config import settings
-from app.search.index import ALIAS_NAME
 
 log = structlog.get_logger()
 
@@ -300,8 +299,8 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
     eco = h.get("ECO", None)
     eco_prefix = eco[0] if eco else None
     features = compute_features(game)
-
     return {
+        "_id": game_hash,
         "game_hash": game_hash,
         "white": h.get("White", "?"),
         "black": h.get("Black", "?"),
@@ -323,15 +322,7 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
 
 
 # -- Bulk indexing -------------------------------------------------------------
-
-
-def iter_bulk_actions(documents: list[dict]) -> Generator[dict, None, None]:
-    for doc in documents:
-        yield {
-            "_index": ALIAS_NAME,
-            "_id": doc["game_hash"],
-            "_source": doc,
-        }
+# ES iter_bulk_actions removed; we now use motor's bulk_write
 
 
 # -- Resumable state -----------------------------------------------------------
@@ -376,20 +367,9 @@ def clear_state() -> None:
 # -- File-level indexer --------------------------------------------------------
 
 
-def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
+async def index_pgn_file(db: AsyncIOMotorDatabase, pgn_path: Path, state: dict) -> dict:
     """
     Parse and index one PGN file with mid-file resumability.
-
-    How resuming works:
-      1. load_state() returns the saved byte_offset for this file (if any)
-      2. f.seek(byte_offset) jumps directly to that position -- O(1)
-      3. chess.pgn.read_game(f) continues reading from that point
-      4. After every bulk flush, f.tell() gives the byte position of the
-         NEXT unread game, which is saved back to state
-
-    On crash, the next run re-indexes at most ES_BULK_BATCH_SIZE games.
-    This is safe because game_hash is the ES _id -- re-indexing a game
-    that was already indexed is a no-op (ES upserts it identically).
     """
     filename = pgn_path.name
     file_log = log.bind(file=filename)
@@ -434,9 +414,14 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
 
             batch.append(doc)
 
-            if len(batch) >= settings.ES_BULK_BATCH_SIZE:
-                success, _ = bulk(es, iter_bulk_actions(batch), raise_on_error=False)
-                games_indexed += success
+            if len(batch) >= getattr(settings, 'ES_BULK_BATCH_SIZE', 500):
+                requests = [ReplaceOne({"_id": d["_id"]}, d, upsert=True) for d in batch]
+                try:
+                    await db["chess_games"].bulk_write(requests, ordered=False)
+                except Exception as exc:
+                    file_log.warning("bulk_write_error", error=str(exc))
+                
+                games_indexed += len(batch)
                 batch = []
 
                 # Checkpoint: save current position before reading the next game.
@@ -459,8 +444,12 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
 
         # Final partial batch
         if batch:
-            success, _ = bulk(es, iter_bulk_actions(batch), raise_on_error=False)
-            games_indexed += success
+            requests = [ReplaceOne({"_id": d["_id"]}, d, upsert=True) for d in batch]
+            try:
+                await db["chess_games"].bulk_write(requests, ordered=False)
+            except Exception as exc:
+                file_log.warning("bulk_write_error", error=str(exc))
+            games_indexed += len(batch)
 
     # Fully done: remove from in_progress, add to completed
     state["in_progress"].pop(filename, None)
@@ -484,7 +473,7 @@ def index_pgn_file(es: Elasticsearch, pgn_path: Path, state: dict) -> dict:
 # -- Pipeline orchestrator -----------------------------------------------------
 
 
-def run_pipeline(es: Elasticsearch) -> None:
+async def run_pipeline(db: AsyncIOMotorDatabase) -> None:
     data_dir = Path(settings.PGN_DATA_DIR)
     pgn_files = sorted(data_dir.glob("*.pgn"))
     state = load_state()
@@ -506,7 +495,7 @@ def run_pipeline(es: Elasticsearch) -> None:
 
     for pgn_path in ordered:
         try:
-            index_pgn_file(es, pgn_path, state)
+            await index_pgn_file(db, pgn_path, state)
         except Exception as exc:
             # State was already checkpointed mid-file.
             # Next run will resume from the last saved offset.

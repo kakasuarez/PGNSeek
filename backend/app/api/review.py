@@ -11,15 +11,23 @@ import shutil
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import UploadFile, Form, APIRouter, Request, HTTPException
+from fastapi import UploadFile, Form, APIRouter, Depends, HTTPException
+from supabase import create_client, Client
 
 from app.review.schemas import (
     UploadSourceConfig,
     ReviewJob,
 )
+from app.db import get_db
+from app.tasks import review_opening_task
+from app.config import settings
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 log = structlog.get_logger()
 router = APIRouter()
+
+# Initialize Supabase client
+supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
 
 # @router.get("/review/debug/counts")
@@ -29,22 +37,27 @@ router = APIRouter()
 
 
 @router.get("/review/{job_id}")
-async def review_status(request: Request, job_id: UUID):
-    status = request.app.state.review_queue.get_status(job_id)
-    if status is None:
+async def review_status(job_id: UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
+    job = await db.review_jobs.find_one({"_id": str(job_id)})
+    if not job:
         raise HTTPException(status_code=404, detail="Review job not found")
-    return {"job_id": job_id, **status}
+    
+    status_response = {"status": job.get("status")}
+    if "error" in job:
+        status_response["error"] = job["error"]
+        
+    return {"job_id": job_id, **status_response}
 
 
 @router.get("/review/{job_id}/reports")
-async def review_reports(request: Request, job_id: UUID):
-    status = request.app.state.review_queue.get_status(job_id)
-    if status is None:
+async def review_reports(job_id: UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
+    job = await db.review_jobs.find_one({"_id": str(job_id)})
+    if not job:
         raise HTTPException(status_code=404, detail="Review job not found")
-    if status.get("status") != "completed":
+    if job.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Review job is not completed yet")
     
-    reports = request.app.state.review_queue.get_reports(job_id)
+    reports = job.get("reports")
     if reports is None:
         raise HTTPException(status_code=404, detail="Reports not found for this job")
         
@@ -60,23 +73,42 @@ async def review_reports(request: Request, job_id: UUID):
         "and return a position report + mistake report."
     ),
 )
-async def review(request: Request, pgn_file: UploadFile, player: str = Form()):
+async def review(
+    pgn_file: UploadFile, 
+    player: str = Form(),
+    db: AsyncIOMotorDatabase = Depends(get_db)
+):
     log.info("review_request", pgn_file=pgn_file, player=player)
-    # Currently using filesystem directly, may later add a storage layer.
-    temp_file = tempfile.NamedTemporaryFile(suffix=".pgn", delete=False)
-    review_queue = request.app.state.review_queue
+    
     try:
-        shutil.copyfileobj(pgn_file.file, temp_file)
+        # Generate a unique object key for this job
+        job_id = UUID(int=0)  # We will generate one or use ReviewJob to generate
         job = ReviewJob(
             source="upload",
             source_config=UploadSourceConfig(
-                temp_file=str(Path(temp_file.name)), player=player
+                temp_file="", player=player # temp_file will be replaced by supabase key
             ),
         )
-        await review_queue.enqueue(job)
+        
+        object_key = f"{job.job_id}.pgn"
+        
+        # Read the file contents
+        file_contents = await pgn_file.read()
+        
+        # Upload to Supabase Storage
+        supabase.storage.from_(settings.SUPABASE_BUCKET).upload(
+            path=object_key,
+            file=file_contents,
+            file_options={"content-type": "application/x-chess-pgn"}
+        )
+        
+        # Update job with the actual object key
+        job.source_config.temp_file = object_key
+        
+        await db.review_jobs.insert_one({"_id": str(job.job_id), "status": "queued"})
+        review_opening_task.delay(job.model_dump(mode="json"))
+        
         return {"status": "queued", "job_id": job.job_id}
     except Exception as e:
-        log.error("error_review_request", e)
-    finally:
-        temp_file.close()
+        log.error("error_review_request", e=str(e), exc_info=True)
     return {"status": "error"}

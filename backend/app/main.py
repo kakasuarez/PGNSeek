@@ -17,11 +17,8 @@ import asyncio
 
 from app.config import settings
 from app.logging_config import configure_logging
-from app.search.index import get_es_client, setup_index
 from app.api.schemas import ErrorDetail
-from app.review.worker import worker
-from app.review.queue import ReviewQueue
-from app.review.service import AnalyzerService
+from app.db import startup_db, shutdown_db
 
 configure_logging()
 log = structlog.get_logger()
@@ -32,19 +29,20 @@ limiter = Limiter(key_func=get_remote_address)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    log.info("startup", env=settings.ENV, es_host=settings.ES_HOST)
-    es = get_es_client()
-    setup_index(es)
-    app.state.es = es
-    queue = ReviewQueue()
-    analysis_service = AnalyzerService()
-    app.state.review_queue = queue
-    app.state.analysis_service = analysis_service
-    worker_task = asyncio.create_task(worker(queue, analysis_service))
+    log.info("startup", env=settings.ENV)
+    await startup_db(app)
+    
+    db = app.state.mongo[settings.MONGODB_DB]
+    
+    # Create indexes
+    from pymongo import ASCENDING, TEXT
+    await db["chess_games"].create_index([("opening_name", TEXT), ("white", TEXT), ("black", TEXT)])
+    await db["lichess_cache"].create_index([("fetched_at", ASCENDING)], expireAfterSeconds=604800)
+    await db["review_jobs"].create_index([("status", ASCENDING)])
+    
     yield
     # Shutdown
-    worker_task.cancel()
-    es.close()
+    await shutdown_db(app)
     log.info("shutdown")
 
 
@@ -104,13 +102,15 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health():
-    """Liveness check — also verifies ES connection."""
-    es = app.state.es
-    cluster = es.cluster.health()
+    """Liveness check — also verifies DB connection."""
+    try:
+        await app.state.mongo.admin.command('ping')
+        db_status = "ok"
+    except Exception:
+        db_status = "error"
     return {
         "status": "ok",
-        "es_status": cluster["status"],
-        "index": settings.ES_INDEX_ALIAS,
+        "db_status": db_status,
     }
 
 
