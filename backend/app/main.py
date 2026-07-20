@@ -13,11 +13,15 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import structlog
+import asyncio
 
 from app.config import settings
 from app.logging_config import configure_logging
 from app.search.index import get_es_client, setup_index
 from app.api.schemas import ErrorDetail
+from app.review.worker import worker
+from app.review.queue import ReviewQueue
+from app.review.service import AnalyzerService
 
 configure_logging()
 log = structlog.get_logger()
@@ -32,8 +36,14 @@ async def lifespan(app: FastAPI):
     es = get_es_client()
     setup_index(es)
     app.state.es = es
+    queue = ReviewQueue()
+    analysis_service = AnalyzerService()
+    app.state.review_queue = queue
+    app.state.analysis_service = analysis_service
+    worker_task = asyncio.create_task(worker(queue, analysis_service))
     yield
     # Shutdown
+    worker_task.cancel()
     es.close()
     log.info("shutdown")
 
@@ -67,7 +77,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -108,3 +118,8 @@ async def health():
 from app.api.search import router as search_router
 
 app.include_router(search_router, prefix="/api/v1")
+
+# Review router — implemented in api/review.py
+from app.api.review import router as review_router
+
+app.include_router(review_router, prefix="/api/v1")

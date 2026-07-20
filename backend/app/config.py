@@ -9,6 +9,10 @@ Never import a raw env var anywhere else in the codebase — always use `setting
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
 from functools import lru_cache
+from pathlib import Path
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -42,6 +46,13 @@ class Settings(BaseSettings):
     CACHE_TTL_SECONDS: int = 300
     CACHE_MAX_SIZE: int = 1000
 
+    # Engine / opening review
+    STOCKFISH_PATH: str | None = None
+    OPENING_REVIEW_ENGINE_DEPTH: int = 12
+    OPENING_REVIEW_MAX_PLIES: int = 20
+    LOCAL_TIMEOUT_SECONDS: float = 30.0 
+    CLOUD_TIMEOUT_SECONDS: float = 10.0
+
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
@@ -70,8 +81,15 @@ class Settings(BaseSettings):
             raise ValueError("ENV must be 'development' or 'production'")
         return v
 
+    @field_validator("OPENING_REVIEW_ENGINE_DEPTH")
+    @classmethod
+    def validate_opening_review_engine_depth(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("OPENING_REVIEW_ENGINE_DEPTH must be >= 1")
+        return v
+
     class Config:
-        env_file = ".env"
+        env_file = ROOT_DIR / ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
 
