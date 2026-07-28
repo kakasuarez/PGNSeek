@@ -1,8 +1,8 @@
 # PGNSeek — Design Decisions
 
-**Project:** PGNSeek — natural language search across millions of chess games  
+**Project:** PGNSeek — natural language search across millions of chess games & opening review engine  
 **Status:** Active  
-**Last updated:** 2026-06-30
+**Last updated:** 2026-07-28  
 
 This document is the authoritative record of every significant design decision made during the project. Before changing anything recorded here, update this document first and note the reason. Each decision includes the context, the choice made, the alternatives considered, and the consequences of changing it later.
 
@@ -10,390 +10,45 @@ This document is the authoritative record of every significant design decision m
 
 ## How to use this document
 
-- **Green field decisions** — made before any code was written. Changing these requires a reindex, a migration, or an API version bump. Treat them as near-permanent.
-- **MVP defaults** — chosen for the MVP with a known upgrade path. Changing these is planned and expected.
-- **Deferred** — explicitly not decided yet. A placeholder so nothing is forgotten.
+- **Green field decisions** — core architectural choices. Changing these requires a reindex, a migration, or an API version bump. Treat them as near-permanent.
+- **MVP defaults** — chosen for the current system state with a known upgrade path.
+- **Deferred** — explicitly not implemented yet. A placeholder so nothing is forgotten.
 
 ---
 
 ## 1. Data Layer
 
-### 1.1 Storage architecture: Elasticsearch-primary, PostgreSQL deferred
+### 1.1 Storage architecture: MongoDB Atlas, Supabase Storage, and Redis
 
-**Decision:** Elasticsearch is the only datastore for the MVP. PostgreSQL is not used yet.
+**Decision:** MongoDB Atlas is the primary database for PGNSeek. Redis is used for Celery task queuing and caching, while Supabase Storage handles temporary PGN file uploads.
 
-**Rationale:** Every query in PGNSeek is a search operation — fuzzy text matching on player names and openings, range filters on ratings and years, numeric comparisons on computed features. Elasticsearch handles all of these natively. PostgreSQL would add operational complexity with no benefit at this stage.
+**Rationale:** MongoDB Atlas provides document storage, full-text search indexing, and native Vector Search capabilities in a single managed service. This eliminated the operational overhead of running Elasticsearch while natively supporting vector similarity search for chess games.
 
-**Constraint:** The FastAPI application and Docker Compose are structured as if PostgreSQL exists (a `db` service slot is reserved in Compose, Pydantic models are kept separate from ES-specific logic). Adding PostgreSQL for user accounts, saved searches, or job tracking in a later phase requires no architectural changes.
+**Collections:**
+- `chess_games`: Primary game documents containing PGN metadata, computed features, and 19-dimensional feature vectors.
+- `position_evals`: Cached Stockfish evaluations per normalized FEN and move.
+- `review_jobs`: Asynchronous opening review job metadata, statuses, and generated reports.
+- `lichess_cache`: Cached external opening explorer data with a 7-day TTL expiration index.
 
-**Consequences of reversing:** Low. PostgreSQL can be added as a second service. No existing code needs to change.
+**Database Access:**
+- FastAPI Backend: Asynchronous motor client (`AsyncIOMotorClient`) via `app/db.py`.
+- Celery Workers & Ingestion CLI: Synchronous PyMongo client (`MongoClient`).
 
----
-
-### 1.2 Index versioning and alias strategy
-
-**Decision:** The physical ES index is always named `chess_games_v{N}` (starting at `chess_games_v1`). All application queries hit the alias `chess_games`, which points to the current version. The alias name is what goes in `.env` as `ES_INDEX_ALIAS`.
-
-**Rationale:** Changing the index mapping (adding a field type, changing an analyzer) requires creating a new index and reindexing all documents. Without an alias, this requires a coordinated downtime window. With an alias, the swap is atomic — one `update_aliases` call moves traffic from the old index to the new one with zero downtime.
-
-**Reindex procedure:**
-1. Create `chess_games_v2` with the new mapping
-2. Run the ingestion pipeline targeting `chess_games_v2`
-3. Call `reindex_swap(es, "chess_games_v2")` — atomic alias swap
-4. Delete `chess_games_v1`
-
-**Consequences of reversing:** Breaking. All search and ingestion code references the alias, not the versioned index. Removing the alias layer means hardcoding an index name everywhere.
+**Consequences of reversing:** High. Re-architecting data access requires updating all query logic in `app/search/mongo_executor.py` and `app/tasks.py`.
 
 ---
 
-### 1.3 Deduplication via game_hash as document _id
+### 1.2 Indexing strategy: MongoDB Text Indexes and Atlas Vector Search
 
-**Decision:** Every game's Elasticsearch `_id` is set to a 32-character SHA-256 hash derived from `White|Black|Date|Moves`. This hash is also stored as a queryable field `game_hash` in `_source`.
+**Decision:** Search capabilities rely on MongoDB text indexes for keyword matching and MongoDB Atlas Vector Search for game similarity queries.
 
-**Hash input:**
-```
-{White}|{Black}|{Date}|{space-separated UCI moves}
-```
+**Indexes configured:**
+- Text index on `chess_games`: `opening_name`, `white`, `black`.
+- Vector search index (`feature_vector_index`) on `chess_games.feature_vector`: 19 dimensions, cosine similarity.
+- TTL index on `lichess_cache.fetched_at`: Expire after 604,800 seconds (7 days).
+- Compound index on `review_jobs.status`.
 
-**Rationale:** Multiple PGN files (across different years of Lichess dumps, FIDE exports, etc.) will contain the same famous games. Without deduplication, the index grows unboundedly and search results contain duplicates. Using the hash as `_id` makes every bulk index call an idempotent upsert — rerunning the pipeline on a file that was already processed produces no side effects.
-
-**Limitation:** Two games between the same players on the same date with identical moves but different annotations will hash identically. This is acceptable — they are the same game.
-
-**Consequences of reversing:** High. The idempotency guarantee disappears. Duplicate games accumulate. Resumable ingestion breaks.
-
----
-
-### 1.4 ES index mapping is strict and flat
-
-**Decision:** The index mapping uses `"dynamic": "strict"` — unknown fields are rejected, not silently indexed. All computed features are flat numeric fields (`float`, `integer`, `boolean`), never nested objects.
-
-**Rationale for strict:** Unknown fields silently indexed into ES cause mapping conflicts when the field appears with different types across documents. Failing loudly at index time is better than discovering a corrupted mapping at query time.
-
-**Rationale for flat features:** Nested objects in ES require nested queries, which are significantly more expensive and complex. Every feature that informs a search (`avg_material_swings`, `piece_sacrifices`, `entered_endgame`) is a single number. Numeric range comparisons on flat fields are the cheapest possible query type in ES.
-
-**Consequences of reversing:** Adding a nested field requires a mapping change (reindex). Dynamic mapping means unexpected fields silently appear in the index — debugging becomes harder.
-
----
-
-### 1.5 Opening name field uses the english analyzer with synonyms
-
-**Decision:** The `opening_name` field uses a custom analyzer (`opening_analyzer`) that applies the English stemmer and a hand-maintained synonym filter.
-
-**Stemmer effect:** "attacking" → "attack", "positional" → "position", "declined" → "declin". Queries for "Sicilian attacking" match games tagged "Sicilian Attack".
-
-**Synonym examples configured:**
-- `kid, king's indian, kings indian`
-- `qgd, queen's gambit declined`
-- `rl, ruy lopez, spanish game`
-- `nimzo, nimzo-indian, nimzo indian`
-
-**Rationale:** Chess opening names have enormous variation in how they are written — abbreviations, hyphenation differences, possessive forms. The synonym filter encodes domain knowledge that no generic analyzer captures.
-
-**Maintenance:** The synonym list lives in the index mapping (`app/search/index.py`). Adding a synonym requires a mapping update and reindex, or using a synonym file on disk (the production upgrade path).
-
-**Consequences of reversing:** Search recall drops significantly for opening queries. Users who type "KID" get no results for King's Indian games.
-
----
-
-### 1.6 Features are computed at index time, never at query time
-
-**Decision:** All chess-specific features (`avg_material_swings`, `max_material_swing`, `piece_sacrifices`, `entered_endgame`, `endgame_move`, `pawn_structure_changes`) are computed during ingestion by traversing the move tree with `python-chess`. They are stored as flat numeric fields. No chess computation happens at query time.
-
-**Rationale:** `python-chess` move traversal on a 60-move game takes approximately 2–5ms. At query time, this would need to run on thousands of candidate documents — making every search take seconds. At index time, it runs once per game and is never repeated (dedup ensures this).
-
-**Current feature set and their search semantics:**
-
-| Field | Type | Semantics |
-|---|---|---|
-| `avg_material_swings` | float | Mean material balance delta per move. High = tactical/aggressive game |
-| `max_material_swing` | float | Largest single-move material change. Catches decisive sacrifices |
-| `piece_sacrifices` | integer | Count of moves where material swing ≥ `SACRIFICE_DELTA` (default: 3 points) |
-| `entered_endgame` | boolean | True if queens left the board and total pieces ≤ `ENDGAME_MAX_PIECES` (default: 12) |
-| `endgame_move` | integer | Move number when endgame started. -1 if no endgame detected |
-| `endgame_type` | keyword | Which piece endgame it is. |
-| `pawn_structure_changes` | integer | Count of pawn captures — proxy for pawn structure complexity |
-
-**Tuning:** All thresholds (`SACRIFICE_DELTA`, `ENDGAME_MAX_PIECES`, `AGGRESSION_THRESHOLD`) are environment variables in `.env`. They can be adjusted without code changes, but reindexing is required to apply new values to existing documents.
-
-**Consequences of reversing:** Search latency becomes untenable at scale.
-
----
-
-### 1.7 Ingestion pipeline is synchronous and resumable
-
-**Decision:** The ingestion pipeline is a synchronous Python script (`pipeline/ingest.py`) that processes PGN files one at a time. Completed files are recorded in `ingestion_state.json`. The pipeline can be interrupted and restarted without reprocessing completed files.
-
-**Upgrade path to async (when needed):**
-- Each PGN file becomes a Celery task
-- `index_pgn_file()` in `app/ingestion/pipeline.py` becomes the task body unchanged
-- `ingestion_state.json` is replaced by task state in Redis
-
-**Why not async for MVP:** Celery + Redis adds two more services and significant configuration overhead. The synchronous pipeline is easy to debug, produces clear logs, and is fast enough for the initial data load.
-
-**Year filter:** Games with a `Date` header year below `MIN_YEAR` (default: 2010) are skipped during ingestion. This is applied at parse time before any feature computation.
-
-**Consequences of reversing:** Resumability is lost — killing the process means starting over.
-
----
-
-## 2. Search Layer
-
-### 2.1 Query model: deterministic three-stage pipeline
-
-**Decision:** The query layer is fully deterministic. There is no ML model, no embeddings, no LLM at query time (in the MVP). The pipeline has three stages:
-
-1. **Token classifier** — regex patterns + keyword dictionaries → typed token dict
-2. **Intent resolver** — tokens → ES clause types (must / should / filter / must_not)
-3. **Query builder** — clauses → ES bool query body
-
-**Upgrade path:**
-- **Phase 2:** Add an LLM preprocessing step that converts a free-text query to a structured JSON of detected filters. The JSON feeds into Stage 2 unchanged. This adds latency (~300ms) but dramatically improves recall for unusual phrasings.
-- **Phase 3:** Fine-tune a chess-domain embedding model for semantic game similarity ("find me games like this one").
-
-**Why deterministic for MVP:** Predictable behavior, zero latency overhead, fully debuggable via `query_debug` in the API response. When a search returns wrong results, the cause is always visible in the debug output.
-
-**Consequences of reversing (going LLM-first):** Non-deterministic behavior, latency dependency on external API, cost per query.
-
----
-
-### 2.2 Clause semantics: must vs filter vs should
-
-**Decision:** Each detected token type maps to a specific ES clause type with consistent semantics:
-
-| Token type | ES clause | Rationale |
-|---|---|---|
-| Opening name | `must` → `match` with fuzziness | Scored — relevance matters. A closer match to "Sicilian" should rank higher |
-| Player name | `must` → `match` with fuzziness | Scored — "Carlsen" should rank exact matches above "Carlsen-like" spellings |
-| Result | `filter` → `term` | Binary — either white won or didn't. No scoring value |
-| Rating range | `filter` → `range` | Binary — either in range or not |
-| Year | `filter` → `term` | Binary |
-| Style tags (aggressive, positional) | `should` → `range` on feature field | Soft preference — boosts matching games, doesn't exclude non-matching ones |
-| Move count | `filter` → `range` | Binary |
-
-**Key principle:** `filter` clauses are cached by ES and contribute zero scoring overhead. Use `filter` for anything binary. Use `must` only when ranking by relevance to the term matters. Use `should` for soft preferences that should boost score without excluding results.
-
-**Consequences of reversing:** Putting everything in `must` means a query for "aggressive Sicilian" returns zero results if no game is tagged both — instead of returning Sicilian games boosted by aggressiveness score.
-
----
-
-### 2.3 Pagination: search_after, not from/size
-
-**Decision:** Pagination uses ES `search_after` with a composite sort key of `[avg_rating DESC, _id ASC]`. The cursor returned in the API response is a base64-encoded JSON array of the last hit's sort values. Clients pass this as the `cursor` query parameter on the next request.
-
-**Rationale:** ES refuses `from/size` queries where `from + size > index.max_result_window` (default 10,000). With millions of games, users who page deep will hit this wall. `search_after` has no depth limit.
-
-**Cursor encoding:** `base64(json([avg_rating_value, "_id_value"]))` — opaque to clients.
-
-**Trade-off:** `search_after` cursors are not stable if new documents are indexed between requests. For a search tool this is acceptable — unlike e-commerce, users don't need perfectly consistent pagination across writes.
-
-**Consequences of reversing:** Results break for any user paging beyond result 10,000. Error is a hard 400 from ES, not a graceful degradation.
-
----
-
-### 2.4 Aggregations included in every search response
-
-**Decision:** Every search response includes an `aggregations` object with counts for: top openings in results, result distribution (white/black/draw), year distribution, ECO category distribution.
-
-**Rationale:** Aggregations are computed by ES in the same query as the search — there is no second round trip. The cost is minimal. The UX benefit is large: the frontend can render faceted filter chips ("Sicilian: 3,421 | French: 812") that update with every query. This is the feature that makes the product feel like a real search engine rather than a list of results.
-
-**Current agg definitions:** Implemented in `app/search/executor.py`. Top 10 buckets per aggregation.
-
-**Consequences of reversing:** The frontend loses live facet counts. This is a visible product regression.
-
----
-
-### 2.5 Default scoring: BM25 with planned function_score upgrade
-
-**Decision:** The MVP uses ES's default BM25 scoring for `must` clauses. A `function_score` wrapper will be added in the first post-MVP sprint to boost results by `avg_rating` and `avg_material_swings` when style queries are present.
-
-**Planned function_score shape:**
-```json
-{
-  "function_score": {
-    "query": { "bool": { ... } },
-    "functions": [
-      { "field_value_factor": { "field": "avg_material_swings", "factor": 1.5, "modifier": "log1p" } }
-    ],
-    "boost_mode": "multiply"
-  }
-}
-```
-
-**Why deferred:** Default BM25 produces acceptable results for the MVP. Tuning `function_score` requires seeing real query results first — premature optimization here produces worse results than waiting for data.
-
----
-
-## 3. API Layer
-
-### 3.1 API contract: three endpoints, versioned under /api/v1
-
-**Decision:** The public API has exactly three endpoints, and they will not change shape without a version bump to `/api/v2`.
-
-```http
-GET /api/v1/search?q=<string>&page_size=<int>&cursor=<token>
-GET /api/v1/games/<game_hash>
-GET /api/v1/games/<game_hash>/similar
-GET /health   (unversioned — infrastructure concern)
-```
-
-**Search response envelope (permanent shape):**
-```json
-{
-  "results":      [ GameResult ],
-  "total":        48201,
-  "page_size":    20,
-  "cursor":       "base64token",
-  "query_debug":  { "raw_query": "...", "detected_tokens": {}, "must_clauses": [], ... },
-  "aggregations": { "openings": [], "results": [], "years": [], "eco_categories": [] }
-}
-```
-
-**Error envelope (permanent shape):**
-```json
-{
-  "error":   "machine_readable_code",
-  "message": "Human readable explanation",
-  "detail":  { "context": "key" }
-}
-```
-
-**`query_debug` rationale:** Exposes what the query parser actually produced. Invaluable during development, and useful for power users who want to understand why results are ranked as they are. Can be hidden behind a `?debug=false` parameter in production if needed.
-
-**Consequences of reversing:** Any frontend or API client built against this contract breaks.
-
----
-
-### 3.2 Rate limiting: per-IP, 60 requests/minute
-
-**Decision:** Every endpoint is rate-limited at 60 requests/minute per IP using `slowapi`. The limit is configurable via `RATE_LIMIT_PER_MINUTE` in `.env`.
-
-**Rationale:** Without rate limiting, a misbehaving client or accidental loop in development hammers Elasticsearch. 60 req/min is generous for a human user and restrictive for automation.
-
-**Upgrade path:** When user accounts are added, switch from per-IP to per-token limiting.
-
----
-
-### 3.3 CORS: localhost:5173 in development, configurable in production
-
-**Decision:** The `CORSMiddleware` allows `http://localhost:5173` (Vite's default dev port) in development. In production, `ALLOWED_ORIGINS` will be set as an environment variable.
-
----
-
-## 4. Infrastructure
-
-### 4.1 Monorepo structure
-
-**Decision:** Single git repository with the following top-level layout:
-
-```
-pgnseek/
-  backend/
-    app/
-      api/          ← FastAPI route handlers
-      api/schemas.py ← shared API response envelopes
-      search/       ← query pipeline, ES index management, executor
-      search/schemas.py ← search API contract models
-      ingestion/    ← PGN parser, feature extractor, bulk indexer
-    tests/
-    Dockerfile
-    requirements.txt
-  frontend/
-    src/
-    Dockerfile
-  pipeline/
-    ingest.py       ← CLI entry point; imports from backend/app/
-  docker/
-    docker-compose.yml
-  .env.example
-  DESIGN_DECISIONS.md   ← this file
-```
-
-**Key rule:** `pipeline/ingest.py` imports directly from `backend/app/`. There is no code duplication between the ingestion CLI and the API server. The pipeline and the API share the same `config.py`, `index.py`, and `ingestion/pipeline.py`.
-
-**Consequences of reversing (splitting into multiple repos):** The shared import path breaks. Config, schemas, and ingestion logic must be duplicated or extracted into a shared package.
-
----
-
-### 4.2 All configuration via environment variables (12-factor)
-
-**Decision:** Every runtime configuration value lives in `.env` and is loaded via `app/config.py` (Pydantic `BaseSettings`). No value is hardcoded anywhere in the application code. Dev and prod differ only in their `.env` files, not in code paths.
-
-**The `.env.example` file is the canonical list of all configuration knobs.** When a new config value is added, `.env.example` must be updated in the same commit.
-
-**Consequences of reversing:** Deployment becomes environment-specific code. Docker images are no longer portable.
-
----
-
-### 4.3 Structured JSON logging via structlog
-
-**Decision:** All application logging uses `structlog` configured to emit JSON lines in production (`LOG_FORMAT=json`) and coloured human-readable output in development (`LOG_FORMAT=pretty`).
-
-**Required fields on every log line:** `event`, `level`, `timestamp`.
-
-**Convention:** Log at `INFO` for normal operations (file indexed, search executed), `WARNING` for recoverable issues (malformed PGN game, unknown field in document), `ERROR` for failures that need investigation.
-
-**Consequences of reversing:** Log aggregation tools (Datadog, CloudWatch, Loki) cannot parse unstructured log lines. Debugging production issues becomes significantly harder.
-
----
-
-### 4.4 Docker Compose service topology
-
-**Decision:** Four services in `docker-compose.yml`:
-
-| Service | Image | Port | Notes |
-|---|---|---|---|
-| `elasticsearch` | elasticsearch:8.13.0 | 9200 | Security disabled for local dev. `xpack.security.enabled=false` |
-| `kibana` | kibana:8.13.0 | 5601 | Dev only — inspect index, run queries manually |
-| `backend` | Built from `backend/Dockerfile` | 8000 | `--reload` flag on in dev |
-| `frontend` | Built from `frontend/Dockerfile` | 5173 | Vite dev server with HMR |
-
-**ES memory:** JVM heap set to 1GB (`-Xms1g -Xmx1g`). Sufficient for development and moderate data volumes. Increase in production.
-
-**Health checks:** The backend service depends on ES being healthy (HTTP cluster health check) before starting. This prevents startup failures from race conditions.
-
-**Kibana rationale:** Not used in production, but invaluable during development for inspecting the index mapping, running Kibana Query Language queries against real data, and verifying that computed features are correct.
-
----
-
-## 5. Deferred Decisions
-
-These are explicitly not decided yet. They are recorded here so they are not forgotten.
-
-| Decision | When to decide | Notes |
-|---|---|---|
-| User accounts and saved searches | Post-MVP | Will require PostgreSQL |
-| Authentication model (JWT vs API keys) | When user accounts are added | — |
-| Production deployment target | After MVP is stable | Render, Railway, or self-hosted |
-| Celery + Redis for async ingestion | When processing > 10 PGN files at once | Upgrade path is documented in §1.7 |
-| `function_score` tuning | After seeing real query results | Documented in §2.5 |
-| PGN viewer in search results | Frontend phase 2 | Requires react-chessboard integration |
-| Board position search via FEN | Phase 3 | Requires position hashing at index time |
-| Embedding-based semantic similarity | Phase 3 | "Find games like this one" feature |
-| Synonym file on disk vs inline | At next reindex | Disk-based synonyms can be updated without reindex |
-
----
-
-## Changelog
-
-| Date | Section | Change | Reason |
-|---|---|---|---|
-| 2026-06-30 | Structure | Move Pydantic schemas into API/search feature modules | Keep code organized by responsibility |
-| 2026-04-25 | Index | Add feature vector | Similarity search |
-| 2026-04-18 | Index | Add PGN moves | Debugging and final result |
-| 2026-04-14 | Index | Add endgame type | Improve endgame detection |
-| 2026-04-05 | All | Initial document created | Project kickoff |
-| 2026-07-20 | Data Layer | Migrated from Elasticsearch to MongoDB Atlas | Move to a single datastore capable of full-text search, vector search, and document storage, while reducing operational complexity. |
-
----
-
-## 6. MongoDB Atlas Vector Search Configuration
-
-As part of the migration to MongoDB, the Elasticsearch dense vector fields were replaced with MongoDB Atlas Vector Search. The index must be manually created in the Atlas UI to enable similarity queries.
-
-**Index Name:** `feature_vector_index` (Must match the name used in `$vectorSearch`)
-**Collection:** `chess_games`
-
-**JSON Definition:**
+**Vector Search Definition:**
 ```json
 {
   "fields": [
@@ -411,9 +66,222 @@ As part of the migration to MongoDB, the Elasticsearch dense vector fields were 
 }
 ```
 
-**Instructions:**
-1. Open your cluster in MongoDB Atlas.
-2. Navigate to **Atlas Search** -> **Create Search Index**.
-3. Choose **JSON Editor**.
-4. Select the `chess_games` collection, name the index `feature_vector_index`.
-5. Paste the JSON definition above and create the index.
+---
+
+### 1.3 Deduplication via game_hash as document _id
+
+**Decision:** Every game's document `_id` is set to a 32-character SHA-256 hash derived from `White|Black|Date|Moves`. This hash is also stored as `game_hash` in document source.
+
+**Hash input:**
+```
+{White}|{Black}|{Date}|{space-separated UCI moves}
+```
+
+**Rationale:** Multiple PGN source files contain duplicate games. Using `game_hash` as `_id` allows idempotent bulk upserts via `ReplaceOne({"_id": d["_id"]}, d, upsert=True)`. Re-running the pipeline on duplicate or interrupted PGN files produces zero duplicate documents.
+
+---
+
+### 1.4 Document Schema and 19-Dimensional Feature Vectors
+
+**Decision:** PGN games are parsed at index time to extract both flat numeric features and a 19-dimensional dense feature vector (`feature_vector`) stored alongside each game document.
+
+**Flat Numeric Features:**
+- `avg_material_swings` (`float`): Mean material balance delta per move. High = tactical/aggressive game.
+- `max_material_swing` (`float`): Largest single-move material change.
+- `piece_sacrifices` (`int`): Count of exchange sequences where material was sacrificed and held.
+- `entered_endgame` (`bool`): True if non-king material on both sides dropped below threshold (<= 13 points).
+- `endgame_move` (`int`): Move number when endgame started (-1 if none).
+- `endgame_type` (`str`): Heavy piece classification (`queen`, `rook`, `minor_piece`, `pawn`, `none`).
+- `pawn_structure_changes` (`int`): Count of pawn captures.
+
+**19-Dimensional Feature Vector Layout:**
+1. `scalars` (6 dims): normalized avg material swings, piece sacrifices, average rating, game length, pawn captures, endgame proportion.
+2. `endgame_type` (5 dims): one-hot encoding (`none`, `queen`, `rook`, `minor_piece`, `pawn`).
+3. `result` (3 dims): weighted outcome (`1-0`, `0-1`, `1/2-1/2`).
+4. `eco_prefix` (5 dims): one-hot encoding (`A`, `B`, `C`, `D`, `E`).
+
+---
+
+### 1.5 Features computed at index time, never at query time
+
+**Decision:** All chess-specific features and feature vectors are pre-computed during ingestion using `python-chess`. No move traversal or feature generation happens during search queries.
+
+**Exchange sequence sacrifice algorithm:**
+The ingestion pipeline groups back-to-back capture/recapture moves into an "exchange sequence" and calculates net material change between the stable balance before and after the sequence. A sacrifice is only registered if material loss persists for quiet moves afterward, avoiding false positives on standard trades or intermediate moves (zwischenzugs).
+
+---
+
+### 1.6 Ingestion pipeline is resumable and checkpointed
+
+**Decision:** The ingestion pipeline (`pipeline/ingest.py` / `backend/app/ingestion/pipeline.py`) tracks mid-file progress using byte-offset checkpointing recorded in `ingestion_state.json`.
+
+**Resume mechanism:** When interrupted, `f.seek(byte_offset)` jumps directly to the start of the next unread game in a PGN file. Flushes happen every batch (`ES_BULK_BATCH_SIZE`, default 500), writing checkpoint state so restarts resume seamlessly without duplicate document creation.
+
+---
+
+## 2. Search Layer
+
+### 2.1 Query model: deterministic three-stage pipeline to MongoDB
+
+**Decision:** The search pipeline remains deterministic and low-latency:
+
+1. **Token classifier** — regex patterns + keyword dictionaries → typed token dict.
+2. **Intent resolver** — tokens → query clause intent (`must`, `should`, `filter`).
+3. **Mongo query builder** — maps clauses into MongoDB queries (`$and`, `$or`, `$text`, range conditions `$gte`/`$lte`).
+
+**Faceted Aggregations:** Every search execution computes faceted aggregations using MongoDB's `$facet` stage:
+- Top 10 openings (`$sortByCount: "$opening_name"`)
+- Top 10 results (`$sortByCount: "$result"`)
+- Top 10 years (`$sortByCount: "$year"`)
+- Top 10 ECO categories (derived via `$substr` on `eco`)
+
+---
+
+### 2.2 Vector similarity search for games
+
+**Decision:** Similarity search for a given game hash (`GET /api/v1/games/{game_hash}/similar`) uses MongoDB Atlas `$vectorSearch` comparing the target game's `feature_vector` against the dataset.
+
+**Pipeline:**
+1. Fetch target game's `feature_vector`.
+2. Run `$vectorSearch` pipeline targeting `feature_vector_index` with cosine similarity.
+3. Exclude the query game (`$ne: game_hash`) and project summary fields.
+
+---
+
+### 2.3 Cursor-based pagination
+
+**Decision:** Pagination uses opaque base64-encoded cursor tokens of the last document `_id` (`filter_doc["_id"] = {"$gt": last_id}`).
+
+**Rationale:** Unlike offset pagination (`from`/`skip`), cursor pagination scales gracefully over large result sets without performance degradation on deep pages.
+
+---
+
+## 3. Opening Review & Asynchronous Tasks
+
+### 3.1 Opening Review Service (Stockfish + Celery + Supabase)
+
+**Decision:** The opening review feature processes user-uploaded PGN files asynchronously to evaluate opening positions and identify repertoire mistakes.
+
+**Workflow:**
+1. **Upload (`POST /api/v1/review`)**: Client uploads PGN file. API uploads file to Supabase Storage (`SUPABASE_BUCKET`), creates a `review_jobs` document with status `"queued"`, and dispatches `review_opening_task` to Celery via Redis broker.
+2. **Worker Processing (`app.tasks.review_opening_task`)**:
+   - Celery worker downloads PGN from Supabase to a temporary local file.
+   - Iterates through games matching target player up to `OPENING_REVIEW_MAX_PLIES` (default 20 plies).
+   - Groups unique positions by normalized FEN.
+   - Evaluates positions using `AnalysisChain`: checks `position_evals` collection cache first, falling back to `CloudAnalyzer` (Lichess API) or `LocalAnalyzer` (Stockfish binary).
+   - Identifies suboptimal moves where played move score loss exceeds optimal engine move score.
+3. **Report Generation**: Aggregates position frequency, engine evaluations, best moves, and played move score losses into job report objects stored in `review_jobs`.
+4. **Cleanup**: Temp files and Supabase storage objects are removed upon job completion or failure.
+
+---
+
+### 3.2 API Contract & Endpoints
+
+**Decision:** Public API endpoints versioned under `/api/v1`:
+
+```http
+# Search Endpoints
+GET /api/v1/search?q=<string>&page_size=<int>&cursor=<token>
+GET /api/v1/games/<game_hash>
+GET /api/v1/games/<game_hash>/similar
+
+# Opening Review Endpoints
+POST /api/v1/review (multipart/form-data: pgn_file, player)
+GET  /api/v1/review/<job_id>
+GET  /api/v1/review/<job_id>/reports
+
+# Health & Diagnostic
+GET /health
+```
+
+**Search Response Schema:**
+```json
+{
+  "results": [ GameResult ],
+  "total": 48201,
+  "page_size": 20,
+  "cursor": "base64token",
+  "query_debug": { "raw_query": "...", "detected_tokens": {}, "must_clauses": [], ... },
+  "aggregations": { "openings": [], "results": [], "years": [], "eco_categories": [] }
+}
+```
+
+---
+
+### 3.3 Rate Limiting and Security
+
+**Decision:** Endpoints are rate-limited via `slowapi` at a configurable default of 60 requests/minute per IP (`RATE_LIMIT_PER_MINUTE`). CORS origins are restricted via `ALLOWED_ORIGINS`.
+
+---
+
+## 4. Infrastructure & Container Topology
+
+### 4.1 Monorepo Layout
+
+```
+pgnseek/
+  backend/
+    app/
+      api/             ← FastAPI routes (search.py, review.py, schemas.py)
+      ingestion/       ← PGN parsing & feature extraction pipeline
+      review/          ← Opening review schemas, analyzers, source providers
+      search/          ← Natural language query parser & MongoDB executor
+      config.py        ← Pydantic BaseSettings environment loader
+      db.py            ← AsyncIOMotorClient database connections
+      logging_config.py← Structlog JSON logging configuration
+      main.py          ← FastAPI application entrypoint
+      tasks.py         ← Celery worker task definitions
+    Dockerfile
+    requirements.txt
+  pipeline/
+    ingest.py          ← CLI entry point for batch data ingestion
+  docker/
+    docker-compose.yml ← Development service orchestration
+  .env.example
+  DESIGN_DECISIONS.md
+```
+
+---
+
+### 4.2 Docker Compose Topology
+
+`docker/docker-compose.yml` orchestrates 4 container services:
+
+| Service | Base / Build | Port | Purpose |
+|---|---|---|---|
+| `redis` | `redis:7-alpine` | 6379 | Celery message broker & result backend |
+| `backend` | `backend/Dockerfile` | 8000 | FastAPI application (Uvicorn) |
+| `celery_worker` | `backend/Dockerfile` | — | Background task worker with Stockfish installed |
+| `frontend` | `frontend/Dockerfile` | 5173 | Vite dev server |
+
+---
+
+### 4.3 12-Factor Configuration & Logging
+
+- Configuration loaded via `app/config.py` using `pydantic-settings`. `.env.example` maintains the canonical list of environment variables.
+- Structured logging implemented via `structlog` emitting JSON lines (`LOG_FORMAT=json`) in production and formatted output (`LOG_FORMAT=pretty`) in development.
+
+---
+
+## 5. Deferred Decisions
+
+| Decision | Status / Target | Notes |
+|---|---|---|
+| User accounts & authentication | Post-MVP | MongoDB collection for users & JWT auth |
+| Custom opening repertoire bookmarks | Post-MVP | Saved searches and user openings |
+| Board position search via FEN | Phase 3 | Position exact/transposition indexing |
+| LLM natural language pre-parser | Phase 3 | Fallback parser for complex queries |
+
+---
+
+## Changelog
+
+| Date | Section | Change | Reason |
+|---|---|---|---|
+| 2026-07-28 | All | Complete update of DESIGN_DECISIONS.md | Sync document with current MongoDB Atlas, Celery/Redis, Supabase Storage, Stockfish Review Engine, and Vector Search implementation. |
+| 2026-07-20 | Data Layer | Migrated from Elasticsearch to MongoDB Atlas | Single datastore for text, vectors, and document storage with lower complexity. |
+| 2026-06-30 | Structure | Move Pydantic schemas into API/search feature modules | Keep code organized by responsibility. |
+| 2026-04-25 | Index | Add feature vector | Similarity search support. |
+| 2026-04-18 | Index | Add PGN moves | Debugging and final result detail. |
+| 2026-04-14 | Index | Add endgame type | Improve endgame classification. |
+| 2026-04-05 | All | Initial document created | Project kickoff. |
