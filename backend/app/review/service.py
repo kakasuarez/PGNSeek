@@ -14,6 +14,7 @@ from app.review.schemas import AnalysisResult
 from app.review.analyzers.chain import AnalysisChain
 from app.review.analyzers.cloud import CloudAnalyzer
 from app.review.analyzers.local import LocalAnalyzer
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 
 log = structlog.get_logger()
@@ -24,12 +25,12 @@ class AnalyzerService:
     Handles caching, calling the analyzer chain, logging.
     """
 
-    def __init__(self):
+    def __init__(self, db: AsyncIOMotorDatabase):
         self.max_plies = settings.OPENING_REVIEW_MAX_PLIES
         self.analyzer_chain = AnalysisChain(
             [CloudAnalyzer(), LocalAnalyzer(depth=settings.OPENING_REVIEW_ENGINE_DEPTH)]
         )
-        self.cache = dict()
+        self.db = db
         self.analysis_counts = {
             "cache_hits": 0,
             "cache_misses": 0,
@@ -57,20 +58,22 @@ class AnalyzerService:
         fen = self._normalize_fen(board)
         root_key = ",".join(move.uci() for move in root_moves or [])
         cache_key = f"{fen}|{root_key}"
-        if cache_key in self.cache:
+        cached = await self.db.position_evals.find_one({"_id": cache_key})
+        if cached:
             self.analysis_counts["cache_hits"] += 1
             log.debug("review_analysis_cache_hit", fen=fen, root_moves=root_key)
-            return self.cache[cache_key]
+            return AnalysisResult(**cached["result"])
         self.analysis_counts["cache_misses"] += 1
         log.debug("review_analysis_cache_miss", fen=fen, root_moves=root_key)
         result = await self.analyzer_chain.analyze(
             board, root_moves=root_moves
         )
-        self.cache[cache_key] = result
-        if result is None:
-            self.analysis_counts["no_result"] += 1
-            log.warning("review_analysis_no_result", fen=fen, root_moves=root_key)
-        else:
+        if result:
+            await self.db.position_evals.replace_one(
+                {"_id": cache_key},
+                {"result": result.model_dump()},
+                upsert=True
+            )
             self.analysis_counts["by_source"][result.source] += 1
             log.info(
                 "review_analysis_complete",
@@ -79,7 +82,10 @@ class AnalyzerService:
                 root_moves=root_key,
                 best_move=result.best_move_uci,
             )
-        return self.cache.get(cache_key)
+        else:
+            self.analysis_counts["no_result"] += 1
+            log.warning("review_analysis_no_result", fen=fen, root_moves=root_key)
+        return result
 
     async def analyze_game(self, game: Game | None, player: str) -> dict[str, Any] | None:
         if game is None:
