@@ -20,11 +20,8 @@ class CloudAnalyzer(GameAnalyzer):
         self.client = Analysis(TokenSession(""))
 
     async def analyze(
-        self, board: chess.Board, root_moves: list[chess.Move] | None = None
+        self, board: chess.Board
     ) -> AnalysisResult | None:
-        if root_moves:
-            log.debug("review_cloud_skip_root_moves")
-            return None
 
         try:
             evaluation = await asyncio.wait_for(
