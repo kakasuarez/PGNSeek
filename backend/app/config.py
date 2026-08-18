@@ -17,7 +17,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 
 class Settings(BaseSettings):
     # MongoDB
-    MONGODB_URI: str
+    MONGODB_URI: str = ""
     MONGODB_DB: str = "pgnseek"
     
     # Redis
