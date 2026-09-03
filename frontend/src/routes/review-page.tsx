@@ -108,13 +108,13 @@ export function ReviewPage() {
     }
   }
 
-  function onDrop(sourceSquare: string, targetSquare: string, piece: string) {
+  function playMove(uci: string) {
     const tempChess = new Chess(historyFens[plyIndex]);
     try {
       const move = tempChess.move({
-        from: sourceSquare,
-        to: targetSquare,
-        promotion: piece[1]?.toLowerCase() ?? "q",
+        from: uci.substring(0, 2),
+        to: uci.substring(2, 4),
+        promotion: uci[4],
       });
       if (move) {
         const newFens = historyFens.slice(0, plyIndex + 1);
@@ -130,6 +130,10 @@ export function ReviewPage() {
       return false;
     }
     return false;
+  }
+
+  function onDrop(sourceSquare: string, targetSquare: string, piece: string) {
+    return playMove(`${sourceSquare}${targetSquare}${piece[1]?.toLowerCase() ?? ""}`);
   }
 
   function resetBoard() {
@@ -308,9 +312,16 @@ export function ReviewPage() {
                       {Object.entries(currentStats.played_moves)
                         .sort((a, b) => b[1] - a[1])
                         .map(([move, count]) => (
-                        <li key={move} className="text-sm flex justify-between bg-white/5 px-2 py-1 rounded">
-                          <span className="font-mono text-white">{move}</span>
-                          <span>{count} times ({Math.round((count / currentStats.occurrences) * 100)}%)</span>
+                        <li key={move} className="text-sm">
+                          <button
+                            type="button"
+                            onClick={() => playMove(move)}
+                            className="flex w-full justify-between rounded bg-white/5 px-2 py-1 text-left transition hover:bg-white/10 hover:cursor-pointer"
+                            aria-label={`Play ${move}`}
+                          >
+                            <span className="font-mono text-white">{move}</span>
+                            <span>{count} times ({Math.round((count / currentStats.occurrences) * 100)}%)</span>
+                          </button>
                         </li>
                       ))}
                     </ul>
