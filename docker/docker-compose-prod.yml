@@ -50,7 +50,7 @@ services:
     restart: unless-stopped
     networks:
       - pgnseek_net
-    command: celery -A app.tasks.celery_app worker --loglevel=info
+    command: celery -A app.review.tasks.celery_app worker --loglevel=info
 
 networks:
   pgnseek_net:

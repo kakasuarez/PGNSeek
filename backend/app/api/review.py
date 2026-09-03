@@ -6,9 +6,7 @@ Opening review endpoint.
 """
 
 import structlog
-import tempfile
-import shutil
-from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 from fastapi import UploadFile, Form, APIRouter, Depends, HTTPException
@@ -18,10 +16,11 @@ from app.review.schemas import (
     UploadSourceConfig,
     ReviewJob,
 )
+from app.review.tasks import review_opening_task as review_opening
 from app.db import get_db
-from app.tasks import review_opening_task
 from app.config import settings
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from celery import Task
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -81,8 +80,6 @@ async def review(
     log.info("review_request", pgn_file=pgn_file, player=player)
     
     try:
-        # Generate a unique object key for this job
-        job_id = UUID(int=0)  # We will generate one or use ReviewJob to generate
         job = ReviewJob(
             source="upload",
             source_config=UploadSourceConfig(
@@ -106,6 +103,7 @@ async def review(
         job.source_config.temp_file = object_key
         
         await db.review_jobs.insert_one({"_id": str(job.job_id), "status": "queued"})
+        review_opening_task = cast(Task, review_opening)
         review_opening_task.delay(job.model_dump(mode="json"))
         
         return {"status": "queued", "job_id": job.job_id}

@@ -8,7 +8,7 @@ from app.review.schemas import AnalysisResult
 class GameAnalyzer(ABC):
     @abstractmethod
     async def analyze(
-        self, board: chess.Board, root_moves: list[chess.Move] | None = None
+        self, board: chess.Board
     ) -> AnalysisResult | None:
         """
         Analyze an individual position.

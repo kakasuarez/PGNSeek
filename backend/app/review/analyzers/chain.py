@@ -18,7 +18,7 @@ class AnalysisChain(GameAnalyzer):
         self, board: chess.Board, root_moves: list[chess.Move] | None = None
     ) -> AnalysisResult | None:
         for analyzer in self.analyzers:
-            result = await analyzer.analyze(board, root_moves=root_moves)
+            result = await analyzer.analyze(board)
             if result is not None:
                 log.debug(
                     "review_analyzer_chain_hit",

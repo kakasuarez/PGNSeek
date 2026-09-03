@@ -51,7 +51,7 @@ class LocalAnalyzer(GameAnalyzer):
         return score.score()
 
     async def analyze(
-        self, board: chess.Board, root_moves: list[chess.Move] | None = None
+        self, board: chess.Board
     ) -> AnalysisResult | None:
         engine = self._start_engine()
         if engine is None:
@@ -61,13 +61,13 @@ class LocalAnalyzer(GameAnalyzer):
             "review_local_analysis",
             fen=board.fen(),
             depth=self.depth,
-            root_moves=[m.uci() for m in root_moves] if root_moves else None,
+            # root_moves=[m.uci() for m in root_moves] if root_moves else None,
         )
         info = await asyncio.to_thread(
             engine.analyse,
             board,
             chess.engine.Limit(depth=self.depth, time=settings.LOCAL_TIMEOUT_SECONDS),
-            root_moves=root_moves,
+            # root_moves=root_moves,
         )
         pv = info.get("pv", [])
         best_move = pv[0] if pv else None

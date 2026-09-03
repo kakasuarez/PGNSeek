@@ -101,3 +101,27 @@ export async function fetchSimilarGames(gameHash: string) {
 }
 
 export { API_URL };
+
+export async function submitReview(file: File, player: string) {
+  const formData = new FormData();
+  formData.append("pgn_file", file);
+  formData.append("player", player);
+
+  const response = await fetch(`${API_URL}/api/v1/review`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.statusText}`);
+  }
+  return response.json() as Promise<{ status: string; job_id: string }>;
+}
+
+export async function fetchReviewStatus(jobId: string) {
+  return fetchJson<{ job_id: string; status: string; error?: string }>(`/api/v1/review/${jobId}`);
+}
+
+export async function fetchReviewReports(jobId: string) {
+  return fetchJson<{ job_id: string; reports: Record<string, any>[] }>(`/api/v1/review/${jobId}/reports`);
+}
