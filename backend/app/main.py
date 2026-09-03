@@ -36,7 +36,9 @@ async def lifespan(app: FastAPI):
     
     # Create indexes
     from pymongo import ASCENDING, TEXT
-    await db["chess_games"].create_index([("opening_name", TEXT), ("white", TEXT), ("black", TEXT)])
+    await db["chess_games"].create_index([("opening_name", ASCENDING)])
+    await db["chess_games"].create_index([("white", ASCENDING)])
+    await db["chess_games"].create_index([("black", ASCENDING)])
     await db["lichess_cache"].create_index([("fetched_at", ASCENDING)], expireAfterSeconds=604800)
     await db["review_jobs"].create_index([("status", ASCENDING)])
     
