@@ -83,6 +83,24 @@ STYLES = {
 }
 
 
+def get_unmatched_words(query: str, tokens: dict) -> list[str]:
+    q = query.lower()
+    for key, pattern in PATTERNS.items():
+        q = re.sub(pattern, " ", q)
+    q = PLAYER_RESULT_PATTERN.sub(" ", q)
+    if "opening" in tokens:
+        opening = tokens["opening"]
+        for alias in OPENINGS[opening]:
+            if alias in q:
+                q = q.replace(alias, " ")
+    if "styles" in tokens:
+        for style in tokens["styles"]:
+            for alias in STYLES[style]:
+                if alias in q:
+                    q = q.replace(alias, " ")
+    return [w for w in q.split() if w.strip()]
+
+
 def extract_keywords(query: str) -> dict:
     tokens = {}
     q = query.lower()
@@ -209,6 +227,17 @@ def resolve_intent(tokens: dict) -> dict:
                 }
             )
 
+    if "unmatched_words" in tokens:
+        for word in tokens["unmatched_words"]:
+            must.append({
+                "bool": {
+                    "should": [
+                        {"match": {"white": {"query": word}}},
+                        {"match": {"black": {"query": word}}}
+                    ]
+                }
+            })
+
     return {"must": must, "should": should, "filter": filters, "must_not": must_not}
 
 
@@ -239,18 +268,21 @@ def build_search_request(
     pattern_tokens = extract_patterns(query_string)
     keyword_tokens = extract_keywords(query_string)
     tokens = {**pattern_tokens, **keyword_tokens}
+    
+    unmatched_words = get_unmatched_words(query_string, tokens)
+    if unmatched_words:
+        tokens["unmatched_words"] = unmatched_words
+        
     clauses = resolve_intent(tokens)
     
     mongo_filter = {}
     and_conditions = []
-    text_queries = set()
     
     def translate_clause(c):
         if "match" in c:
             for field, val in c["match"].items():
                 query_str = val["query"] if isinstance(val, dict) else val
-                text_queries.add(query_str)
-            return None
+                return {field: {"$regex": query_str, "$options": "i"}}
         elif "term" in c:
             for field, val in c["term"].items():
                 return {field: val}
@@ -271,6 +303,9 @@ def build_search_request(
                             if tc: inner_and.append(tc)
                         if inner_and:
                             or_conds.append({"$and": inner_and} if len(inner_and) > 1 else inner_and[0])
+                    else:
+                        tc = translate_clause(sc)
+                        if tc: or_conds.append(tc)
                 if or_conds:
                     return {"$or": or_conds}
         return None
@@ -291,9 +326,6 @@ def build_search_request(
         if should_conds:
             and_conditions.append({"$or": should_conds})
 
-    if text_queries:
-        and_conditions.append({"$text": {"$search": " ".join(text_queries)}})
-        
     if and_conditions:
         if len(and_conditions) == 1:
             mongo_filter = and_conditions[0]
