@@ -37,6 +37,7 @@ async def process_job(job: ReviewJob):
     
     object_key = None
     local_temp_path = None
+    service = None
     
     try:
         object_key = job.source_config.temp_file
@@ -88,6 +89,8 @@ async def process_job(job: ReviewJob):
                 await asyncio.to_thread(
                     supabase.storage.from_(settings.SUPABASE_BUCKET).remove, [object_key]
                 )
+            if service is not None:
+                service.close()
         except Exception as cleanup_err:
             log.warning("cleanup_failed", error=str(cleanup_err))
 

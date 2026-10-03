@@ -27,6 +27,12 @@ class LocalAnalyzer(GameAnalyzer):
             self._engine = chess.engine.SimpleEngine.popen_uci(self.engine_path)
         return self._engine
 
+    def close(self) -> None:
+        if self._engine is not None:
+            log.info("review_local_engine_stop", path=self.engine_path)
+            self._engine.quit()
+            self._engine = None
+
     def _score_to_result(self, score: chess.engine.Score | None) -> AnalysisScore:
         if score is None:
             return AnalysisScore()

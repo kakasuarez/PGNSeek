@@ -27,9 +27,8 @@ class AnalyzerService:
 
     def __init__(self, db: AsyncIOMotorDatabase):
         self.max_plies = settings.OPENING_REVIEW_MAX_PLIES
-        self.analyzer_chain = AnalysisChain(
-            [CloudAnalyzer(), LocalAnalyzer(depth=settings.OPENING_REVIEW_ENGINE_DEPTH)]
-        )
+        self.local_analyzer = LocalAnalyzer(depth=settings.OPENING_REVIEW_ENGINE_DEPTH)
+        self.analyzer_chain = AnalysisChain([CloudAnalyzer(), self.local_analyzer])
         self.db = db
         self.analysis_counts = {
             "cache_hits": 0,
@@ -38,6 +37,10 @@ class AnalyzerService:
             "by_source": {"lichess_cloud": 0, "local_stockfish": 0},
         }
         log.info("review_analyzer_service_initialized", max_plies=self.max_plies)
+
+    def close(self) -> None:
+        """Stop the local Stockfish process, if one was started."""
+        self.local_analyzer.close()
 
     def _normalize_fen(self, board: chess.Board) -> str:
         return " ".join(board.fen().split(" ")[:4])
