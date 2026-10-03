@@ -127,8 +127,8 @@ class AnalyzerService:
                 best_move_analysis = await self.analyze(board=board)
                 if best_move_analysis is None:
                     log.error("review_analysis_failed", fen=fen)
-                    continue
-                bucket["best_move"] = best_move_analysis.best_move_uci
+                else:
+                    bucket["best_move"] = best_move_analysis.best_move_uci
 
 
             board.push(move)

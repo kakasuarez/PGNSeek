@@ -24,6 +24,7 @@ export function ReviewPage() {
   const [player, setPlayer] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [rawReports, setRawReports] = useState<any[]>([]);
   const [boardOrientation, setBoardOrientation] = useState<"white" | "black">("white");
   
@@ -82,6 +83,9 @@ export function ReviewPage() {
       try {
         const res = await fetchReviewStatus(jobId);
         setStatus(res.status);
+        if (res.status === "failed") {
+          setError(res.error ?? "Review failed.");
+        }
         if (res.status === "completed") {
           const reportRes = await fetchReviewReports(jobId);
           setRawReports(reportRes.reports);
@@ -98,12 +102,14 @@ export function ReviewPage() {
     e.preventDefault();
     if (!file || !player) return;
     try {
+      setError(null);
       setStatus("uploading...");
       const res = await submitReview(file, player);
       setJobId(res.job_id);
       setStatus(res.status);
     } catch (err) {
       console.error(err);
+      setError(err instanceof Error ? err.message : "Upload failed.");
       setStatus("error");
     }
   }
@@ -151,8 +157,13 @@ export function ReviewPage() {
         </p>
       </div>
 
-      {!jobId || status === "error" ? (
+      {!jobId || status === "error" || status === "failed" ? (
         <Card className="rounded-xl border border-white/10 bg-[rgba(16,22,29,0.72)] p-6">
+          {error && (
+            <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+              {error}
+            </div>
+          )}
           <form onSubmit={handleUpload} className="flex flex-col gap-4 max-w-md">
             <div>
               <label className="block text-sm text-[var(--muted)] mb-1">PGN File</label>

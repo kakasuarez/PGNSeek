@@ -113,7 +113,8 @@ export async function submitReview(file: File, player: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`Upload failed: ${response.statusText}`);
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail ?? body?.message ?? `Upload failed: ${response.statusText}`);
   }
   return response.json() as Promise<{ status: string; job_id: string }>;
 }

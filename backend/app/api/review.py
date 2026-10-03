@@ -9,7 +9,9 @@ import structlog
 from typing import cast
 from uuid import UUID
 
-from fastapi import UploadFile, Form, APIRouter, Depends, HTTPException
+from fastapi import UploadFile, Form, APIRouter, Depends, HTTPException, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from supabase import create_client, Client
 
 from app.review.schemas import (
@@ -24,6 +26,7 @@ from celery import Task
 
 log = structlog.get_logger()
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 # Initialize Supabase client
 supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
@@ -72,13 +75,23 @@ async def review_reports(job_id: UUID, db: AsyncIOMotorDatabase = Depends(get_db
         "and return a position report + mistake report."
     ),
 )
+@limiter.limit(f"{settings.REVIEW_RATE_LIMIT_PER_MINUTE}/minute")
 async def review(
-    pgn_file: UploadFile, 
+    request: Request,
+    pgn_file: UploadFile,
     player: str = Form(),
     db: AsyncIOMotorDatabase = Depends(get_db)
 ):
     log.info("review_request", pgn_file=pgn_file, player=player)
-    
+
+    # Read one byte past the limit so oversized files are detected without loading them fully
+    file_contents = await pgn_file.read(settings.REVIEW_MAX_UPLOAD_BYTES + 1)
+    if len(file_contents) > settings.REVIEW_MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PGN file exceeds {settings.REVIEW_MAX_UPLOAD_BYTES // 1_000_000} MB limit",
+        )
+
     try:
         job = ReviewJob(
             source="upload",
@@ -88,10 +101,7 @@ async def review(
         )
         
         object_key = f"{job.job_id}.pgn"
-        
-        # Read the file contents
-        file_contents = await pgn_file.read()
-        
+
         # Upload to Supabase Storage
         supabase.storage.from_(settings.SUPABASE_BUCKET).upload(
             path=object_key,
@@ -109,4 +119,4 @@ async def review(
         return {"status": "queued", "job_id": job.job_id}
     except Exception as e:
         log.error("error_review_request", e=str(e), exc_info=True)
-    return {"status": "error"}
+    raise HTTPException(status_code=500, detail="Could not submit the review job. Please try again.")

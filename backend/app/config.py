@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     DEFAULT_PAGE_SIZE: int = 20
     MAX_PAGE_SIZE: int = 100
     RATE_LIMIT_PER_MINUTE: int = 60
+    REVIEW_RATE_LIMIT_PER_MINUTE: int = 5
+    REVIEW_MAX_UPLOAD_BYTES: int = 5_000_000
     ALLOWED_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     # Caching
