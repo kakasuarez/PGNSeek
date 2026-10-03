@@ -115,7 +115,7 @@ The ingestion pipeline groups back-to-back capture/recapture moves into an "exch
 
 **Decision:** The ingestion pipeline (`pipeline/ingest.py` / `backend/app/ingestion/pipeline.py`) tracks mid-file progress using byte-offset checkpointing recorded in `ingestion_state.json`.
 
-**Resume mechanism:** When interrupted, `f.seek(byte_offset)` jumps directly to the start of the next unread game in a PGN file. Flushes happen every batch (`ES_BULK_BATCH_SIZE`, default 500), writing checkpoint state so restarts resume seamlessly without duplicate document creation.
+**Resume mechanism:** When interrupted, `f.seek(byte_offset)` jumps directly to the start of the next unread game in a PGN file. Flushes happen every batch (`INGESTION_BATCH_SIZE`, default 500), writing checkpoint state so restarts resume seamlessly without duplicate document creation.
 
 ---
 

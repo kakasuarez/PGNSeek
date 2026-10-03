@@ -7,7 +7,7 @@ Responsibilities:
     1. Find all PGN files in PGN_DATA_DIR
     2. Resume interrupted files using byte-offset checkpointing
     3. Skip fully completed files
-    4. For each file: parse games -> compute features -> bulk index to ES
+    4. For each file: parse games -> compute features -> bulk upsert to MongoDB
 
 State schema (ingestion_state.json):
     {
@@ -23,8 +23,8 @@ State schema (ingestion_state.json):
 
 Resume mechanism: f.seek(byte_offset) jumps directly to the start of the
 next unread game. State is written after every bulk flush, so on crash
-you re-index at most ES_BULK_BATCH_SIZE games — which is idempotent
-because game_hash is used as the ES document _id.
+you re-index at most INGESTION_BATCH_SIZE games — which is idempotent
+because game_hash is used as the MongoDB document _id.
 """
 
 import json
@@ -322,7 +322,7 @@ def game_to_document(game: chess.pgn.Game, source_file: str) -> dict | None:
 
 
 # -- Bulk indexing -------------------------------------------------------------
-# ES iter_bulk_actions removed; we now use motor's bulk_write
+# Games are upserted in batches via motor's bulk_write (ReplaceOne, upsert=True).
 
 
 # -- Resumable state -----------------------------------------------------------
@@ -414,7 +414,7 @@ async def index_pgn_file(db: AsyncIOMotorDatabase, pgn_path: Path, state: dict) 
 
             batch.append(doc)
 
-            if len(batch) >= getattr(settings, 'ES_BULK_BATCH_SIZE', 500):
+            if len(batch) >= settings.INGESTION_BATCH_SIZE:
                 requests = [ReplaceOne({"_id": d["_id"]}, d, upsert=True) for d in batch]
                 try:
                     await db["chess_games"].bulk_write(requests, ordered=False)

@@ -65,7 +65,7 @@ async def execute_search(db: AsyncIOMotorDatabase, req: SearchRequest) -> Search
     )
 
     # Note: count_documents can be slow on large datasets, 
-    # but without ES we must do a count if total is needed.
+    # but MongoDB has no cheaper way to get an exact total.
     # To keep pagination working properly we count the base query.
     total = await collection.count_documents(base_query)
     

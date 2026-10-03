@@ -10,7 +10,7 @@ from typing import Any, Optional
 from pydantic import BaseModel
 
 
-# -- Game document (what comes back from ES _source) ---------------------------
+# -- Game document (what comes back from the chess_games collection) -----------
 
 class GameResult(BaseModel):
     game_hash: str

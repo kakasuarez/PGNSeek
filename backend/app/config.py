@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     INGESTION_STATE_FILE: str = "./data/json/ingestion_state.json"
     ECO_TO_OPENING_FILE: str = "./data/json/eco_to_opening.json"
     MIN_YEAR: int = 2010
+    INGESTION_BATCH_SIZE: int = 500
 
     # Feature extraction thresholds
     AGGRESSION_THRESHOLD: float = 3.0

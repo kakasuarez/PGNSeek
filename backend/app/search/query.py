@@ -3,8 +3,8 @@ app/search/query.py
 
 Three-stage query pipeline:
     Stage 1 — Token classifier  (regex + keyword dicts)
-    Stage 2 — Intent resolver   (tokens → ES clause types)
-    Stage 3 — Query builder     (assemble ES bool query)
+    Stage 2 — Intent resolver   (tokens → must/filter/should clauses)
+    Stage 3 — Query builder     (translate clauses into a MongoDB filter)
 """
 
 from dataclasses import dataclass, field
