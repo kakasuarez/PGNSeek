@@ -1,7 +1,7 @@
 """
 Tests for opening review mistake detection.
 
-Run from backend/: venv/bin/python -m pytest app/tests
+Run from backend/: .venv/bin/python -m pytest app/tests
 """
 
 import asyncio
@@ -203,7 +203,8 @@ class FakeService(AnalyzerService):
     """AnalyzerService with the cached analyzer chain replaced by fixed evaluations, on an in-memory database."""
 
     def __init__(self, evaluations: dict[str, tuple[int, str | None]], max_plies: int):
-        super().__init__(db=FakeDB())  # type: ignore[arg-type]
+        self.fake_db = FakeDB()
+        super().__init__(db=self.fake_db)  # type: ignore[arg-type]
         self.max_plies = max_plies
         self.evaluations = evaluations
         self.analyzed: list[str] = []
@@ -228,7 +229,7 @@ class FakeService(AnalyzerService):
         )
         fens = [
             d["fen"]
-            for d in self.db["review_positions"].documents
+            for d in self.fake_db["review_positions"].documents
             if d["color"] == color
         ]
         positions = asyncio.run(get_positions(self.db, "job-1", color, fens))

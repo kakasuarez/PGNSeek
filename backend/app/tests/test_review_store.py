@@ -1,7 +1,7 @@
 """
 Tests for the review position store and the position endpoints.
 
-Run from backend/: venv/bin/python -m pytest app/tests
+Run from backend/: .venv/bin/python -m pytest app/tests
 """
 
 import asyncio

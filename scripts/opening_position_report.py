@@ -16,7 +16,7 @@ first N plies, the report stores:
     - one local Stockfish evaluation for the position
 
 Examples:
-    backend/venv/bin/python scripts/opening_position_report.py \
+    backend/.venv/bin/python scripts/opening_position_report.py \
         --input "data/pgn/export/lichess export white analysis.pgn" \
         --player game \
         --engine-path /path/to/stockfish

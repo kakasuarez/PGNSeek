@@ -1,0 +1,27 @@
+# Direct runtime dependencies of backend/app, pipeline/ and scripts/.
+# requirements.txt is compiled from this file; regenerate it after any change:
+#   uv pip compile requirements.in -o requirements.txt --python-version 3.12
+# Development-only tools go in requirements-dev.in.
+
+# -- Web API -------------------------------------------------------------------
+fastapi==0.112.0
+python-multipart==0.0.22    # parses UploadFile / Form in POST /api/v1/review
+slowapi==0.1.9              # rate limiting
+uvicorn==0.29.0             # ASGI server (Dockerfile CMD)
+
+# -- Configuration, models, logging --------------------------------------------
+pydantic==2.12.5
+pydantic-settings==2.13.1   # reads .env via its python-dotenv dependency
+structlog==24.1.0
+
+# -- Storage -------------------------------------------------------------------
+motor==3.4.0                # async MongoDB driver (API, ingestion, review worker)
+pymongo==4.7.0              # sync driver and bulk operations
+supabase==2.31.0            # temporary PGN upload storage
+
+# -- Opening review worker -----------------------------------------------------
+celery==5.4.0
+redis==5.0.4                # Celery broker and result backend (redis://)
+chess==1.11.2               # python-chess: PGN parsing, boards, Stockfish (UCI)
+berserk==0.14.0             # Lichess cloud evaluation API
+requests==2.33.1            # imported for Lichess request errors

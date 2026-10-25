@@ -1,0 +1,9 @@
+# Development dependencies: everything in requirements.txt plus test and data tooling.
+# requirements-dev.txt is compiled from this file; regenerate it after any change:
+#   uv pip compile requirements-dev.in -o requirements-dev.txt --python-version 3.12
+
+-r requirements.txt
+
+pytest==8.2.0               # backend/app/tests
+httpx                       # FastAPI TestClient (version pinned by requirements.txt via supabase)
+beautifulsoup4==4.14.3      # data/eco_codes.py, which rebuilds data/json/eco_to_opening.json
