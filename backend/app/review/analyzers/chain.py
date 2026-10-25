@@ -6,7 +6,6 @@ import structlog
 from app.review.analyzers.base import GameAnalyzer
 from app.review.schemas import AnalysisResult
 
-
 log = structlog.get_logger()
 
 
@@ -26,5 +25,7 @@ class AnalysisChain(GameAnalyzer):
                     source=result.source,
                 )
                 return result
-            log.debug("review_analyzer_chain_miss", analyzer=analyzer.__class__.__name__)
+            log.debug(
+                "review_analyzer_chain_miss", analyzer=analyzer.__class__.__name__
+            )
         return None

@@ -19,7 +19,11 @@ from app.config import settings
 from app.api.schemas import ErrorDetail
 from app.search.schemas import SearchResponse
 from app.search.query import build_search_request
-from app.search.mongo_executor import execute_search, get_game_by_hash, build_similarity_query
+from app.search.mongo_executor import (
+    execute_search,
+    get_game_by_hash,
+    build_similarity_query,
+)
 from app.db import get_db
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -55,7 +59,7 @@ async def search(
         default=None,
         description="Pagination cursor from previous response (opaque token)",
     ),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     log.info(
         "search_request", query=q, page_size=page_size, has_cursor=cursor is not None
@@ -95,7 +99,9 @@ async def get_game(game_hash: str, db: AsyncIOMotorDatabase = Depends(get_db)):
 
 @router.get("/games/{game_hash}/similar", summary="Get similar games from its hash")
 @limiter.limit(f"{settings.RATE_LIMIT_PER_MINUTE}/minute")
-async def find_similar(request: Request, game_hash: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def find_similar(
+    request: Request, game_hash: str, db: AsyncIOMotorDatabase = Depends(get_db)
+):
     results = await build_similarity_query(db, game_hash)
     if not results:
         raise HTTPException(status_code=404, detail="No similar games found")

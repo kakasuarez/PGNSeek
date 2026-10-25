@@ -26,7 +26,11 @@ from app.tests.fake_mongo import FakeDB
 
 
 def make_game(
-    moves: str, white: str = "me", black: str = "them", result: str = "1-0", fen: str | None = None
+    moves: str,
+    white: str = "me",
+    black: str = "them",
+    result: str = "1-0",
+    fen: str | None = None,
 ) -> chess.pgn.Game:
     headers = f'[White "{white}"]\n[Black "{black}"]\n[Result "{result}"]\n'
     if fen:
@@ -97,9 +101,15 @@ def test_losing_move_in_equal_position_is_a_blunder():
 
 def test_same_cp_loss_matters_less_when_already_winning():
     # 200 cp dropped from +900 barely changes the winning chances
-    assert score_move(AnalysisScore(cp=900), AnalysisScore(cp=-700))["classification"] is None
+    assert (
+        score_move(AnalysisScore(cp=900), AnalysisScore(cp=-700))["classification"]
+        is None
+    )
     # 150 cp dropped from +600 is an inaccuracy
-    assert score_move(AnalysisScore(cp=600), AnalysisScore(cp=-450))["classification"] == "inaccuracy"
+    assert (
+        score_move(AnalysisScore(cp=600), AnalysisScore(cp=-450))["classification"]
+        == "inaccuracy"
+    )
 
 
 def test_engine_noise_never_reports_a_gain():
@@ -133,7 +143,9 @@ def test_builder_merges_games_per_colour():
     builder = ReviewReportBuilder("me", max_plies=4)
     assert builder.add_game(make_game("1. e4 e5 2. Nf3 Nc6 3. Bb5", result="1-0"))
     assert builder.add_game(make_game("1. e4 e5 2. Nf3 Nf6", result="1/2-1/2"))
-    assert builder.add_game(make_game("1. d4 d5", white="them", black="me", result="0-1"))
+    assert builder.add_game(
+        make_game("1. d4 d5", white="them", black="me", result="0-1")
+    )
 
     white = builder.repertoires["white"]
     black = builder.repertoires["black"]
@@ -161,16 +173,26 @@ def test_builder_merges_transpositions():
     builder = ReviewReportBuilder("me", max_plies=4)
     builder.add_game(make_game("1. Nf3 d5 2. d4 Nf6"))
     builder.add_game(make_game("1. d4 d5 2. Nf3 e6"))
-    position = builder.repertoires["white"]["positions"][fen_after("d2d4", "d7d5", "g1f3")]
+    position = builder.repertoires["white"]["positions"][
+        fen_after("d2d4", "d7d5", "g1f3")
+    ]
     assert position["occurrences"] == 2
-    assert position["line"] == ["g1f3", "d7d5", "d2d4"]  # from the first game that reached it
+    assert position["line"] == [
+        "g1f3",
+        "d7d5",
+        "d2d4",
+    ]  # from the first game that reached it
 
 
 def test_builder_skips_other_players_and_custom_setups():
     builder = ReviewReportBuilder("me", max_plies=4)
     assert not builder.add_game(make_game("1. e4 e5", white="a", black="b"))
-    assert not builder.add_game(make_game("1. Ke2", fen="4k3/8/8/8/8/8/8/4K3 w - - 0 1"))
-    assert not builder.add_game(make_game("1. e4 e5", white="Me"))  # names match exactly
+    assert not builder.add_game(
+        make_game("1. Ke2", fen="4k3/8/8/8/8/8/8/4K3 w - - 0 1")
+    )
+    assert not builder.add_game(
+        make_game("1. e4 e5", white="Me")
+    )  # names match exactly
     assert builder.games_skipped == 3 and builder.games_included == 0
 
 
@@ -192,12 +214,23 @@ class FakeService(AnalyzerService):
         if fen not in self.evaluations:
             return None
         cp, best = self.evaluations[fen]
-        return AnalysisResult(source="local_stockfish", depth=12, score=AnalysisScore(cp=cp), best_move_uci=best)
+        return AnalysisResult(
+            source="local_stockfish",
+            depth=12,
+            score=AnalysisScore(cp=cp),
+            best_move_uci=best,
+        )
 
     def review_and_load(self, games, player: str = "me", color: str = "white"):
         """Run a review, then load the saved positions of one repertoire."""
-        report = asyncio.run(self.review(games, player, tree_id="job-1", expires_at=None))
-        fens = [d["fen"] for d in self.db["review_positions"].documents if d["color"] == color]
+        report = asyncio.run(
+            self.review(games, player, tree_id="job-1", expires_at=None)
+        )
+        fens = [
+            d["fen"]
+            for d in self.db["review_positions"].documents
+            if d["color"] == color
+        ]
         positions = asyncio.run(get_positions(self.db, "job-1", color, fens))
         return report, positions
 
@@ -210,7 +243,10 @@ def test_review_detects_and_ranks_recurring_mistakes():
             start: (30, "e2e4"),
             before_move_2: (40, "g1f3"),
             fen_after("e2e4", "e7e5", "d1h5"): (150, None),  # black is +150 after Qh5
-            fen_after("e2e4", "e7e5", "f2f3"): (60, None),  # black is +60 after f3: an inaccuracy
+            fen_after("e2e4", "e7e5", "f2f3"): (
+                60,
+                None,
+            ),  # black is +60 after f3: an inaccuracy
         },
         max_plies=3,
     )
@@ -226,19 +262,31 @@ def test_review_detects_and_ranks_recurring_mistakes():
 
     # Only the player's positions and the positions after non-best moves are analyzed
     assert sorted(service.analyzed) == sorted(
-        [start, before_move_2, fen_after("e2e4", "e7e5", "d1h5"), fen_after("e2e4", "e7e5", "f2f3")]
+        [
+            start,
+            before_move_2,
+            fen_after("e2e4", "e7e5", "d1h5"),
+            fen_after("e2e4", "e7e5", "f2f3"),
+        ]
     )
 
     position = positions[before_move_2]
     assert "line" not in position  # only mistakes carry their line
     assert position["best_move"] == "g1f3"
-    assert position["evaluation"] == {"cp": 40, "mate": None, "depth": 12, "source": "local_stockfish"}
+    assert position["evaluation"] == {
+        "cp": 40,
+        "mate": None,
+        "depth": 12,
+        "source": "local_stockfish",
+    }
     assert position["played_moves"]["g1f3"]["loss_cp"] == 0
     assert position["played_moves"]["d1h5"]["loss_cp"] == 190
     assert position["played_moves"]["d1h5"]["classification"] == "blunder"
     assert position["played_moves"]["f2f3"]["classification"] == "inaccuracy"
 
-    assert [(m["move"], m["count"], m["classification"]) for m in white["mistakes"]] == [
+    assert [
+        (m["move"], m["count"], m["classification"]) for m in white["mistakes"]
+    ] == [
         ("d1h5", 2, "blunder"),
         ("f2f3", 1, "inaccuracy"),
     ]
@@ -249,8 +297,15 @@ def test_review_detects_and_ranks_recurring_mistakes():
     assert top["impact"] == pytest.approx(2 * top["win_chance_loss"])
     assert white["counts"] == {"inaccuracy": 1, "mistake": 0, "blunder": 1}
     assert white["mistakes_total"] == 2
-    assert "positions" not in white  # the tree is stored per position, not on the report
-    assert report["summary"] == {"player": "me", "games_included": 4, "games_skipped": 0, "max_plies": 3}
+    assert (
+        "positions" not in white
+    )  # the tree is stored per position, not on the report
+    assert report["summary"] == {
+        "player": "me",
+        "games_included": 4,
+        "games_skipped": 0,
+        "max_plies": 3,
+    }
 
 
 def test_review_survives_failed_analysis():

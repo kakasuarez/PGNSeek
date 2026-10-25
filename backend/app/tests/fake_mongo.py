@@ -20,7 +20,9 @@ def _matches(document: dict[str, Any], query: dict[str, Any]) -> bool:
     return True
 
 
-def _project(document: dict[str, Any], projection: dict[str, int] | None) -> dict[str, Any]:
+def _project(
+    document: dict[str, Any], projection: dict[str, int] | None
+) -> dict[str, Any]:
     document = copy.deepcopy(document)
     if not projection:
         return document
@@ -56,10 +58,16 @@ class FakeCollection:
     async def delete_many(self, query: dict[str, Any]):
         self.documents = [d for d in self.documents if not _matches(d, query)]
 
-    def find(self, query: dict[str, Any], projection: dict[str, int] | None = None) -> FakeCursor:
-        return FakeCursor([_project(d, projection) for d in self.documents if _matches(d, query)])
+    def find(
+        self, query: dict[str, Any], projection: dict[str, int] | None = None
+    ) -> FakeCursor:
+        return FakeCursor(
+            [_project(d, projection) for d in self.documents if _matches(d, query)]
+        )
 
-    async def find_one(self, query: dict[str, Any], projection: dict[str, int] | None = None):
+    async def find_one(
+        self, query: dict[str, Any], projection: dict[str, int] | None = None
+    ):
         for document in self.documents:
             if _matches(document, query):
                 return _project(document, projection)

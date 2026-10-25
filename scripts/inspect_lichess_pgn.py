@@ -26,7 +26,6 @@ from pathlib import Path
 import chess
 import chess.pgn
 
-
 OPENING_COMMENT_RE = re.compile(r"\b[A-E][0-9]{2}\s+")
 
 
@@ -52,14 +51,21 @@ def classify_comment(comment: str) -> list[str]:
         labels.append("elapsed_move_time_tag")
     if OPENING_COMMENT_RE.search(comment.strip()):
         labels.append("opening_comment")
-    if "best." in comment or "Blunder." in comment or "Mistake." in comment or "Inaccuracy." in comment:
+    if (
+        "best." in comment
+        or "Blunder." in comment
+        or "Mistake." in comment
+        or "Inaccuracy." in comment
+    ):
         labels.append("engine_annotation_text")
     if comment.strip() and not labels:
         labels.append("plain_text_comment")
     return labels
 
 
-def inspect_game(game: chess.pgn.Game, game_number: int, max_moves: int | None) -> dict[str, int]:
+def inspect_game(
+    game: chess.pgn.Game, game_number: int, max_moves: int | None
+) -> dict[str, int]:
     feature_counts: Counter[str] = Counter()
 
     print(f"\n=== Game {game_number} ===")
@@ -108,7 +114,9 @@ def inspect_game(game: chess.pgn.Game, game_number: int, max_moves: int | None) 
 
         variation_sans: list[str] = []
         for side_variation in next_node.variations[1:]:
-            variation_sans.append(next_node.board().variation_san([side_variation.move]))
+            variation_sans.append(
+                next_node.board().variation_san([side_variation.move])
+            )
 
         comment_labels = classify_comment(raw_comment)
         for label in comment_labels:

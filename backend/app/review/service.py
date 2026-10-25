@@ -18,7 +18,6 @@ from app.review.analyzers.cloud import CloudAnalyzer
 from app.review.analyzers.local import LocalAnalyzer
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-
 log = structlog.get_logger()
 
 
@@ -44,9 +43,7 @@ class AnalyzerService:
         """Stop the local Stockfish process, if one was started."""
         self.local_analyzer.close()
 
-    async def analyze(
-        self, board: chess.Board
-    ) -> AnalysisResult | None:
+    async def analyze(self, board: chess.Board) -> AnalysisResult | None:
         fen = normalize_fen(board)
         cache_key = fen
         cached = await self.db.position_evals.find_one({"_id": cache_key})
@@ -56,14 +53,10 @@ class AnalyzerService:
             return AnalysisResult(**cached["result"])
         self.analysis_counts["cache_misses"] += 1
         log.debug("review_analysis_cache_miss", fen=fen)
-        result = await self.analyzer_chain.analyze(
-            board
-        )
+        result = await self.analyzer_chain.analyze(board)
         if result:
             await self.db.position_evals.replace_one(
-                {"_id": cache_key},
-                {"result": result.model_dump()},
-                upsert=True
+                {"_id": cache_key}, {"result": result.model_dump()}, upsert=True
             )
             self.analysis_counts["by_source"][result.source] += 1
             log.info(
@@ -114,9 +107,13 @@ class AnalyzerService:
             for uci, played in position["played_moves"].items():
                 after_move = None
                 if uci != best.best_move_uci:
-                    after_move = await self._evaluate_after(board, chess.Move.from_uci(uci))
+                    after_move = await self._evaluate_after(
+                        board, chess.Move.from_uci(uci)
+                    )
                     if after_move is None:
-                        log.error("review_move_analysis_failed", fen=position["fen"], move=uci)
+                        log.error(
+                            "review_move_analysis_failed", fen=position["fen"], move=uci
+                        )
                         continue
                 played.update(score_move(best.score, after_move))
 
@@ -134,7 +131,9 @@ class AnalyzerService:
         )
         return report
 
-    async def _evaluate_after(self, board: chess.Board, move: chess.Move) -> AnalysisScore | None:
+    async def _evaluate_after(
+        self, board: chess.Board, move: chess.Move
+    ) -> AnalysisScore | None:
         """Evaluate the position after `move`, from the opponent's (side to move's) point of view."""
         after = board.copy(stack=False)
         after.push(move)

@@ -114,7 +114,9 @@ def score_move(best: AnalysisScore, after_move: AnalysisScore | None) -> dict[st
 
     # Engine noise can make a move look better than the best move; never report a gain
     loss_cp = max(0, best_cp - move_cp)
-    win_chance_loss = round(max(0.0, winning_chances(best_cp) - winning_chances(move_cp)), 3)
+    win_chance_loss = round(
+        max(0.0, winning_chances(best_cp) - winning_chances(move_cp)), 3
+    )
     return {
         "evaluation": evaluation,
         "loss_cp": loss_cp,
@@ -155,7 +157,9 @@ class ReviewReportBuilder:
             return False
 
         self.games_included += 1
-        repertoire = self.repertoires["white" if player_color == chess.WHITE else "black"]
+        repertoire = self.repertoires[
+            "white" if player_color == chess.WHITE else "black"
+        ]
         repertoire["games"] += 1
         result = game.headers.get("Result", "*")
         won = result == ("1-0" if player_color == chess.WHITE else "0-1")
@@ -236,10 +240,14 @@ class ReviewReportBuilder:
                             "loss_cp": played["loss_cp"],
                             "win_chance_loss": played["win_chance_loss"],
                             "classification": played["classification"],
-                            "impact": round(played["count"] * played["win_chance_loss"], 3),
+                            "impact": round(
+                                played["count"] * played["win_chance_loss"], 3
+                            ),
                         }
                     )
-            mistakes.sort(key=lambda m: (-m["impact"], -m["count"], m["fen"], m["move"]))
+            mistakes.sort(
+                key=lambda m: (-m["impact"], -m["count"], m["fen"], m["move"])
+            )
             counts = {label: 0 for _, label in reversed(CLASSIFICATION_THRESHOLDS)}
             for mistake in mistakes:
                 counts[mistake["classification"]] += 1

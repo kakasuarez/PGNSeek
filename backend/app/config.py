@@ -11,7 +11,6 @@ from pydantic import field_validator
 from functools import lru_cache
 from pathlib import Path
 
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
@@ -19,7 +18,7 @@ class Settings(BaseSettings):
     # MongoDB
     MONGODB_URI: str = ""
     MONGODB_DB: str = "pgnseek"
-    
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
@@ -59,7 +58,7 @@ class Settings(BaseSettings):
     OPENING_REVIEW_ENGINE_DEPTH: int = 12
     OPENING_REVIEW_MAX_PLIES: int = 20
     REVIEW_TTL_SECONDS: int = 604_800
-    LOCAL_TIMEOUT_SECONDS: float = 30.0 
+    LOCAL_TIMEOUT_SECONDS: float = 30.0
     CLOUD_TIMEOUT_SECONDS: float = 10.0
 
     # Logging

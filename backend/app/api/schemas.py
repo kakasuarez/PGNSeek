@@ -10,6 +10,6 @@ from pydantic import BaseModel
 
 
 class ErrorDetail(BaseModel):
-    error: str                    # machine-readable code e.g. "query_parse_error"
-    message: str                  # human-readable explanation
-    detail: Optional[dict] = None # extra context (raw query, field name, etc.)
+    error: str  # machine-readable code e.g. "query_parse_error"
+    message: str  # human-readable explanation
+    detail: Optional[dict] = None  # extra context (raw query, field name, etc.)

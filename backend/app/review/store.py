@@ -63,7 +63,8 @@ async def get_positions(
 ) -> dict[str, dict[str, Any]]:
     """Positions found in the tree, keyed by normalized FEN. Missing FENs are left out."""
     cursor = db[COLLECTION].find(
-        {"tree_id": tree_id, "color": color, "fen": {"$in": list(set(fens))}}, _PROJECTION
+        {"tree_id": tree_id, "color": color, "fen": {"$in": list(set(fens))}},
+        _PROJECTION,
     )
     return {document["fen"]: document async for document in cursor}
 
@@ -71,7 +72,9 @@ async def get_positions(
 def child_fens(position: dict[str, Any], limit: int = MAX_CHILDREN) -> list[str]:
     """FENs reached by the position's most played moves."""
     board = chess.Board(position["fen"])
-    moves = sorted(position["played_moves"].items(), key=lambda item: -item[1]["count"])[:limit]
+    moves = sorted(
+        position["played_moves"].items(), key=lambda item: -item[1]["count"]
+    )[:limit]
     fens = []
     for uci, _ in moves:
         board.push_uci(uci)

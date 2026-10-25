@@ -26,54 +26,63 @@ celery_app = Celery(
 
 async def process_job(job: ReviewJob):
     job_id = str(job.job_id)
-    
+
     client = AsyncIOMotorClient(settings.MONGODB_URI)
     db = client[settings.MONGODB_DB]
-    
+
     await db.review_jobs.update_one(
-        {"_id": job_id},
-        {"$set": {"status": "running"}},
-        upsert=True
+        {"_id": job_id}, {"$set": {"status": "running"}}, upsert=True
     )
-    
+
     object_key = None
     local_temp_path = None
     service = None
-    
+
     try:
         object_key = job.source_config.temp_file
         local_temp_fd, local_temp_path = tempfile.mkstemp(suffix=".pgn")
-        
+
         # Download the PGN from Supabase Storage
         res = await asyncio.to_thread(
             supabase.storage.from_(settings.SUPABASE_BUCKET).download, object_key
         )
-        
+
         with os.fdopen(local_temp_fd, "wb") as f:
             f.write(res)
-            
+
         job.source_config.temp_file = local_temp_path
-        
+
         source = create_source(job)
         player = source.player
-        
+
         service = AnalyzerService(db)
-        
+
         # The review lives for REVIEW_TTL_SECONDS from completion; positions expire with the job
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.REVIEW_TTL_SECONDS)
-        report = await service.review(source.iter_games(), player, tree_id=job_id, expires_at=expires_at)
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=settings.REVIEW_TTL_SECONDS
+        )
+        report = await service.review(
+            source.iter_games(), player, tree_id=job_id, expires_at=expires_at
+        )
 
         await db.review_jobs.update_one(
             {"_id": job_id},
-            {"$set": {"status": "completed", "report": report, "expires_at": expires_at}}
+            {
+                "$set": {
+                    "status": "completed",
+                    "report": report,
+                    "expires_at": expires_at,
+                }
+            },
         )
         log.info("task_review_opening_completed", job_id=job_id)
-        
+
     except Exception as exc:
-        log.error("task_review_opening_failed", job_id=job_id, error=str(exc), exc_info=True)
+        log.error(
+            "task_review_opening_failed", job_id=job_id, error=str(exc), exc_info=True
+        )
         await db.review_jobs.update_one(
-            {"_id": job_id},
-            {"$set": {"status": "failed", "error": str(exc)}}
+            {"_id": job_id}, {"$set": {"status": "failed", "error": str(exc)}}
         )
         raise exc
     finally:
@@ -83,7 +92,8 @@ async def process_job(job: ReviewJob):
                 os.remove(local_temp_path)
             if object_key is not None:
                 await asyncio.to_thread(
-                    supabase.storage.from_(settings.SUPABASE_BUCKET).remove, [object_key]
+                    supabase.storage.from_(settings.SUPABASE_BUCKET).remove,
+                    [object_key],
                 )
             if service is not None:
                 service.close()

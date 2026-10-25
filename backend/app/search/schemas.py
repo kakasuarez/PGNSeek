@@ -9,8 +9,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
-
 # -- Game document (what comes back from the chess_games collection) -----------
+
 
 class GameResult(BaseModel):
     game_hash: str
@@ -19,7 +19,7 @@ class GameResult(BaseModel):
     white_elo: Optional[int] = None
     black_elo: Optional[int] = None
     avg_rating: Optional[float] = None
-    result: Optional[str] = None   # "1-0" | "0-1" | "1/2-1/2"
+    result: Optional[str] = None  # "1-0" | "0-1" | "1/2-1/2"
     date: Optional[str] = None
     year: Optional[int] = None
     eco: Optional[str] = None
@@ -36,6 +36,7 @@ class GameResult(BaseModel):
 
 # -- Aggregations --------------------------------------------------------------
 
+
 class BucketCount(BaseModel):
     key: str
     count: int
@@ -50,6 +51,7 @@ class Aggregations(BaseModel):
 
 # -- Query debug (what the parser produced, visible in response) ---------------
 
+
 class QueryDebug(BaseModel):
     raw_query: str
     detected_tokens: dict[str, Any] = {}
@@ -60,10 +62,11 @@ class QueryDebug(BaseModel):
 
 # -- Search response envelope --------------------------------------------------
 
+
 class SearchResponse(BaseModel):
     results: list[GameResult]
     total: int
     page_size: int
-    cursor: Optional[str] = None   # opaque search_after token (base64)
+    cursor: Optional[str] = None  # opaque search_after token (base64)
     query_debug: QueryDebug
     aggregations: Aggregations

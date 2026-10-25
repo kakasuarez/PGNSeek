@@ -56,9 +56,7 @@ class LocalAnalyzer(GameAnalyzer):
 
         return score.score()
 
-    async def analyze(
-        self, board: chess.Board
-    ) -> AnalysisResult | None:
+    async def analyze(self, board: chess.Board) -> AnalysisResult | None:
         engine = self._start_engine()
         if engine is None:
             return None
@@ -83,7 +81,9 @@ class LocalAnalyzer(GameAnalyzer):
         return AnalysisResult(
             source="local_stockfish",
             depth=self.depth,
-            score=self._score_to_result(pov_score.pov(perspective) if pov_score else None),
+            score=self._score_to_result(
+                pov_score.pov(perspective) if pov_score else None
+            ),
             score_value=self._score_to_ordering_value(pov_score, perspective),
             best_move_uci=best_move.uci() if best_move else None,
         )

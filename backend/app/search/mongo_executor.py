@@ -13,17 +13,22 @@ from app.search.schemas import (
 
 log = structlog.get_logger()
 
+
 def _encode_cursor(doc_id: str) -> str:
     return base64.urlsafe_b64encode(doc_id.encode()).decode()
+
 
 def _decode_cursor(cursor: str) -> str:
     return base64.urlsafe_b64decode(cursor.encode()).decode()
 
-async def execute_search(db: AsyncIOMotorDatabase, req: SearchRequest) -> SearchResponse:
+
+async def execute_search(
+    db: AsyncIOMotorDatabase, req: SearchRequest
+) -> SearchResponse:
     collection = db["chess_games"]
-    
+
     filter_doc = req.query.copy() if req.query else {}
-    
+
     if req.search_after:
         last_id = _decode_cursor(req.search_after)
         if "_id" not in filter_doc:
@@ -33,29 +38,40 @@ async def execute_search(db: AsyncIOMotorDatabase, req: SearchRequest) -> Search
 
     # Default sort for pagination
     sort = [("_id", 1)]
-    
+
     # Compute aggregations using $facet
     base_query = req.query if req.query else {}
     facet_pipeline = [
         {"$match": base_query},
-        {"$facet": {
-            "openings": [{"$sortByCount": "$opening_name"}, {"$limit": 10}],
-            "results": [{"$sortByCount": "$result"}, {"$limit": 10}],
-            "years": [{"$sortByCount": "$year"}, {"$limit": 10}],
-            "eco_categories": [
-                {"$group": {"_id": {"$substr": ["$eco", 0, 1]}, "count": {"$sum": 1}}},
-                {"$sort": {"count": -1}},
-                {"$limit": 10}
-            ]
-        }}
+        {
+            "$facet": {
+                "openings": [{"$sortByCount": "$opening_name"}, {"$limit": 10}],
+                "results": [{"$sortByCount": "$result"}, {"$limit": 10}],
+                "years": [{"$sortByCount": "$year"}, {"$limit": 10}],
+                "eco_categories": [
+                    {
+                        "$group": {
+                            "_id": {"$substr": ["$eco", 0, 1]},
+                            "count": {"$sum": 1},
+                        }
+                    },
+                    {"$sort": {"count": -1}},
+                    {"$limit": 10},
+                ],
+            }
+        },
     ]
-    
+
     facet_cursor = collection.aggregate(facet_pipeline)
     facet_docs = await facet_cursor.to_list(length=1)
     aggs_data = facet_docs[0] if facet_docs else {}
-    
+
     def _map_buckets(buckets: list) -> list[BucketCount]:
-        return [BucketCount(key=str(b["_id"]), count=b["count"]) for b in buckets if b.get("_id") is not None]
+        return [
+            BucketCount(key=str(b["_id"]), count=b["count"])
+            for b in buckets
+            if b.get("_id") is not None
+        ]
 
     aggs = Aggregations(
         openings=_map_buckets(aggs_data.get("openings", [])),
@@ -64,27 +80,27 @@ async def execute_search(db: AsyncIOMotorDatabase, req: SearchRequest) -> Search
         eco_categories=_map_buckets(aggs_data.get("eco_categories", [])),
     )
 
-    # Note: count_documents can be slow on large datasets, 
+    # Note: count_documents can be slow on large datasets,
     # but MongoDB has no cheaper way to get an exact total.
     # To keep pagination working properly we count the base query.
     total = await collection.count_documents(base_query)
-    
+
     if req.source_fields:
         projection = {field: 1 for field in req.source_fields}
         projection["_id"] = 1
         cursor = collection.find(filter_doc, projection)
     else:
         cursor = collection.find(filter_doc)
-        
+
     cursor = cursor.sort(sort).limit(req.size)
     docs = await cursor.to_list(length=req.size)
-    
+
     results = []
     for doc in docs:
         if "game_hash" not in doc:
             doc["game_hash"] = str(doc.get("_id"))
         results.append(GameResult(**doc))
-        
+
     next_cursor = None
     if docs and len(docs) == req.size:
         next_cursor = _encode_cursor(str(docs[-1]["_id"]))
@@ -106,6 +122,7 @@ async def execute_search(db: AsyncIOMotorDatabase, req: SearchRequest) -> Search
         aggregations=aggs,
     )
 
+
 async def get_game_by_hash(db: AsyncIOMotorDatabase, game_hash: str) -> dict | None:
     doc = await db["chess_games"].find_one({"_id": game_hash})
     if doc:
@@ -113,15 +130,18 @@ async def get_game_by_hash(db: AsyncIOMotorDatabase, game_hash: str) -> dict | N
             doc["game_hash"] = doc["_id"]
     return doc
 
-async def build_similarity_query(db: AsyncIOMotorDatabase, game_hash: str, size: int = 10) -> list:
+
+async def build_similarity_query(
+    db: AsyncIOMotorDatabase, game_hash: str, size: int = 10
+) -> list:
     source = await db["chess_games"].find_one({"_id": game_hash})
     if not source:
         return []
-        
+
     query_vector = source.get("feature_vector")
     if not query_vector:
         return []
-        
+
     pipeline = [
         {
             "$vectorSearch": {
@@ -130,7 +150,7 @@ async def build_similarity_query(db: AsyncIOMotorDatabase, game_hash: str, size:
                 "queryVector": query_vector,
                 "numCandidates": size * 10,
                 "limit": size,
-                "filter": {"_id": {"$ne": game_hash}}
+                "filter": {"_id": {"$ne": game_hash}},
             }
         },
         {
@@ -144,10 +164,10 @@ async def build_similarity_query(db: AsyncIOMotorDatabase, game_hash: str, size:
                 "piece_sacrifices": 1,
                 "game_hash": 1,
                 "pgn_moves": 1,
-                "_id": 0
+                "_id": 0,
             }
-        }
+        },
     ]
-    
+
     cursor = db["chess_games"].aggregate(pipeline)
     return await cursor.to_list(length=size)

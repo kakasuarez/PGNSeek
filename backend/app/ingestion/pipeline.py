@@ -415,12 +415,14 @@ async def index_pgn_file(db: AsyncIOMotorDatabase, pgn_path: Path, state: dict) 
             batch.append(doc)
 
             if len(batch) >= settings.INGESTION_BATCH_SIZE:
-                requests = [ReplaceOne({"_id": d["_id"]}, d, upsert=True) for d in batch]
+                requests = [
+                    ReplaceOne({"_id": d["_id"]}, d, upsert=True) for d in batch
+                ]
                 try:
                     await db["chess_games"].bulk_write(requests, ordered=False)
                 except Exception as exc:
                     file_log.warning("bulk_write_error", error=str(exc))
-                
+
                 games_indexed += len(batch)
                 batch = []
 

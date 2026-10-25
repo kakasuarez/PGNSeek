@@ -59,7 +59,9 @@ def _normalize_fen(fen: str) -> str:
         raise HTTPException(status_code=422, detail=f"Invalid FEN: {fen}")
 
 
-async def _completed_job(db: AsyncIOMotorDatabase, job_id: UUID, projection: dict | None = None) -> dict:
+async def _completed_job(
+    db: AsyncIOMotorDatabase, job_id: UUID, projection: dict | None = None
+) -> dict:
     job = await db.review_jobs.find_one({"_id": str(job_id)}, projection)
     if not job:
         raise HTTPException(status_code=404, detail="Review job not found")
@@ -79,11 +81,11 @@ async def review_status(job_id: UUID, db: AsyncIOMotorDatabase = Depends(get_db)
     job = await db.review_jobs.find_one({"_id": str(job_id)})
     if not job:
         raise HTTPException(status_code=404, detail="Review job not found")
-    
+
     status_response = {"status": job.get("status")}
     if "error" in job:
         status_response["error"] = job["error"]
-        
+
     return {"job_id": job_id, **status_response}
 
 
@@ -112,7 +114,9 @@ async def review_position(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     await _completed_job(db, job_id, {"status": 1})
-    position, children = await get_position_with_children(db, str(job_id), color, _normalize_fen(fen))
+    position, children = await get_position_with_children(
+        db, str(job_id), color, _normalize_fen(fen)
+    )
     return {"position": position, "children": children}
 
 
@@ -122,7 +126,9 @@ async def review_position(
     description="Returns the positions found, keyed by normalized FEN. FENs no game reached are left out.",
 )
 async def review_positions_batch(
-    job_id: UUID, body: PositionsBatchRequest, db: AsyncIOMotorDatabase = Depends(get_db)
+    job_id: UUID,
+    body: PositionsBatchRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     await _completed_job(db, job_id, {"status": 1})
     fens = [_normalize_fen(fen) for fen in body.fens]
@@ -144,7 +150,7 @@ async def review(
     request: Request,
     pgn_file: UploadFile,
     player: str = Form(),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     log.info("review_request", pgn_file=pgn_file, player=player)
 
@@ -160,29 +166,36 @@ async def review(
         job = ReviewJob(
             source="upload",
             source_config=UploadSourceConfig(
-                temp_file="", player=player # temp_file will be replaced by supabase key
+                temp_file="",
+                player=player,  # temp_file will be replaced by supabase key
             ),
         )
-        
+
         object_key = f"{job.job_id}.pgn"
 
         # Upload to Supabase Storage
         supabase.storage.from_(settings.SUPABASE_BUCKET).upload(
             path=object_key,
             file=file_contents,
-            file_options={"content-type": "application/x-chess-pgn"}
+            file_options={"content-type": "application/x-chess-pgn"},
         )
-        
+
         # Update job with the actual object key
         job.source_config.temp_file = object_key
-        
+
         # Jobs that never complete still expire; the worker resets this on completion
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.REVIEW_TTL_SECONDS)
-        await db.review_jobs.insert_one({"_id": str(job.job_id), "status": "queued", "expires_at": expires_at})
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=settings.REVIEW_TTL_SECONDS
+        )
+        await db.review_jobs.insert_one(
+            {"_id": str(job.job_id), "status": "queued", "expires_at": expires_at}
+        )
         review_opening_task = cast(Task, review_opening)
         review_opening_task.delay(job.model_dump(mode="json"))
-        
+
         return {"status": "queued", "job_id": job.job_id}
     except Exception as e:
         log.error("error_review_request", e=str(e), exc_info=True)
-    raise HTTPException(status_code=500, detail="Could not submit the review job. Please try again.")
+    raise HTTPException(
+        status_code=500, detail="Could not submit the review job. Please try again."
+    )
