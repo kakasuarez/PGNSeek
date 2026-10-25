@@ -6,7 +6,6 @@ from typing import Generator, Any
 from chess.pgn import read_game, Game
 from pathlib import Path
 
-
 log = structlog.get_logger()
 
 
@@ -27,4 +26,8 @@ class UploadSource(ReviewSource):
                 games_seen += 1
                 yield game
         game_path.unlink()
-        log.info("review_upload_source_completed", temp_file=str(game_path), games_seen=games_seen)
+        log.info(
+            "review_upload_source_completed",
+            temp_file=str(game_path),
+            games_seen=games_seen,
+        )

@@ -58,8 +58,8 @@ type ApiError = {
   detail?: Record<string, unknown>;
 };
 
-async function fetchJson<T>(path: string) {
-  const response = await fetch(`${API_URL}${path}`);
+async function fetchJson<T>(path: string, init?: RequestInit) {
+  const response = await fetch(`${API_URL}${path}`, init);
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`;
     try {
@@ -102,6 +102,67 @@ export async function fetchSimilarGames(gameHash: string) {
 
 export { API_URL };
 
+// Opening review report — mirrors backend/app/review/report.py.
+// All evaluations are from the reviewed player's point of view.
+
+export type ReviewScore = { cp: number | null; mate: number | null };
+
+export type ReviewClassification = "inaccuracy" | "mistake" | "blunder";
+
+export type ReviewPlayedMove = {
+  count: number;
+  // Scoring fields are only present on positions where the player is to move
+  evaluation?: ReviewScore;
+  loss_cp?: number;
+  win_chance_loss?: number;
+  classification?: ReviewClassification | null;
+};
+
+export type ReviewPosition = {
+  fen: string;
+  color: "white" | "black";
+  side_to_move: "white" | "black";
+  player_to_move: boolean;
+  occurrences: number;
+  wins: number;
+  draws: number;
+  best_move: string | null;
+  evaluation: (ReviewScore & { depth: number; source: string }) | null;
+  played_moves: Record<string, ReviewPlayedMove>;
+};
+
+export type ReviewMistake = {
+  fen: string;
+  line: string[];
+  move: string;
+  count: number;
+  best_move: string | null;
+  evaluation_before: ReviewScore;
+  evaluation_after: ReviewScore;
+  loss_cp: number;
+  win_chance_loss: number;
+  classification: ReviewClassification;
+  impact: number;
+};
+
+export type ReviewRepertoire = {
+  games: number;
+  counts: Record<ReviewClassification, number>;
+  // Top mistakes by impact; counts and mistakes_total cover all of them
+  mistakes: ReviewMistake[];
+  mistakes_total: number;
+};
+
+export type ReviewReport = {
+  summary: {
+    player: string;
+    games_included: number;
+    games_skipped: number;
+    max_plies: number;
+  };
+  repertoires: Record<"white" | "black", ReviewRepertoire>;
+};
+
 export async function submitReview(file: File, player: string) {
   const formData = new FormData();
   formData.append("pgn_file", file);
@@ -113,7 +174,8 @@ export async function submitReview(file: File, player: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`Upload failed: ${response.statusText}`);
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail ?? body?.message ?? `Upload failed: ${response.statusText}`);
   }
   return response.json() as Promise<{ status: string; job_id: string }>;
 }
@@ -123,5 +185,22 @@ export async function fetchReviewStatus(jobId: string) {
 }
 
 export async function fetchReviewReports(jobId: string) {
-  return fetchJson<{ job_id: string; reports: Record<string, any>[] }>(`/api/v1/review/${jobId}/reports`);
+  return fetchJson<{ job_id: string; report: ReviewReport }>(`/api/v1/review/${jobId}/reports`);
+}
+
+// The position tree is fetched per position, so large reviews never load in full.
+
+export async function fetchReviewPosition(jobId: string, color: "white" | "black", fen: string) {
+  const params = new URLSearchParams({ color, fen });
+  return fetchJson<{ position: ReviewPosition | null; children: ReviewPosition[] }>(
+    `/api/v1/review/${jobId}/positions?${params}`,
+  );
+}
+
+export async function fetchReviewPositions(jobId: string, color: "white" | "black", fens: string[]) {
+  return fetchJson<{ positions: Record<string, ReviewPosition> }>(`/api/v1/review/${jobId}/positions/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ color, fens }),
+  });
 }

@@ -31,17 +31,30 @@ async def lifespan(app: FastAPI):
     # Startup
     log.info("startup", env=settings.ENV)
     await startup_db(app)
-    
+
     db = app.state.mongo[settings.MONGODB_DB]
-    
+
     # Create indexes
     from pymongo import ASCENDING, TEXT
+
     await db["chess_games"].create_index([("opening_name", ASCENDING)])
     await db["chess_games"].create_index([("white", ASCENDING)])
     await db["chess_games"].create_index([("black", ASCENDING)])
-    await db["lichess_cache"].create_index([("fetched_at", ASCENDING)], expireAfterSeconds=604800)
+    await db["lichess_cache"].create_index(
+        [("fetched_at", ASCENDING)], expireAfterSeconds=604800
+    )
     await db["review_jobs"].create_index([("status", ASCENDING)])
-    
+    # Reviews expire at their `expires_at`; documents without the field never expire
+    await db["review_jobs"].create_index(
+        [("expires_at", ASCENDING)], expireAfterSeconds=0
+    )
+    await db["review_positions"].create_index(
+        [("tree_id", ASCENDING), ("color", ASCENDING), ("fen", ASCENDING)], unique=True
+    )
+    await db["review_positions"].create_index(
+        [("expires_at", ASCENDING)], expireAfterSeconds=0
+    )
+
     yield
     # Shutdown
     await shutdown_db(app)
@@ -106,7 +119,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 async def health():
     """Liveness check — also verifies DB connection."""
     try:
-        await app.state.mongo.admin.command('ping')
+        await app.state.mongo.admin.command("ping")
         db_status = "ok"
     except Exception:
         db_status = "error"

@@ -4,7 +4,6 @@ from app.review.sources.base import ReviewSource
 from app.review.sources.upload import UploadSource
 from app.review.schemas import ReviewJob
 
-
 log = structlog.get_logger()
 
 

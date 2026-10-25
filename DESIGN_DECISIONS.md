@@ -27,7 +27,8 @@ This document is the authoritative record of every significant design decision m
 **Collections:**
 - `chess_games`: Primary game documents containing PGN metadata, computed features, and 19-dimensional feature vectors.
 - `position_evals`: Cached Stockfish evaluations per normalized FEN and move.
-- `review_jobs`: Asynchronous opening review job metadata, statuses, and generated reports.
+- `review_jobs`: Asynchronous opening review job metadata, statuses, and generated reports (summary and top mistakes). Expire 7 days after completion.
+- `review_positions`: Opening review position trees, one document per `(tree_id, color, fen)`. For uploads `tree_id` is the job id and positions expire with the job.
 - `lichess_cache`: Cached external opening explorer data with a 7-day TTL expiration index.
 
 **Database Access:**
@@ -47,6 +48,8 @@ This document is the authoritative record of every significant design decision m
 - Vector search index (`feature_vector_index`) on `chess_games.feature_vector`: 19 dimensions, cosine similarity.
 - TTL index on `lichess_cache.fetched_at`: Expire after 604,800 seconds (7 days).
 - Compound index on `review_jobs.status`.
+- TTL index on `review_jobs.expires_at` and `review_positions.expires_at` (`expireAfterSeconds: 0`): documents expire at their own `expires_at`, set to `REVIEW_TTL_SECONDS` (default 7 days) after completion. Documents without the field never expire, which leaves room for long-lived trees synced from Lichess / Chess.com.
+- Unique compound index on `review_positions` `(tree_id, color, fen)`.
 
 **Vector Search Definition:**
 ```json
@@ -164,14 +167,15 @@ The ingestion pipeline groups back-to-back capture/recapture moves into an "exch
 
 **Workflow:**
 1. **Upload (`POST /api/v1/review`)**: Client uploads PGN file. API uploads file to Supabase Storage (`SUPABASE_BUCKET`), creates a `review_jobs` document with status `"queued"`, and dispatches `review_opening_task` to Celery via Redis broker.
-2. **Worker Processing (`app.tasks.review_opening_task`)**:
+2. **Worker Processing (`app.review.tasks.review_opening_task`)**:
    - Celery worker downloads PGN from Supabase to a temporary local file.
-   - Iterates through games matching target player up to `OPENING_REVIEW_MAX_PLIES` (default 20 plies).
-   - Groups unique positions by normalized FEN.
-   - Evaluates positions using `AnalysisChain`: checks `position_evals` collection cache first, falling back to `CloudAnalyzer` (Lichess API) or `LocalAnalyzer` (Stockfish binary).
-   - Identifies suboptimal moves where played move score loss exceeds optimal engine move score.
-3. **Report Generation**: Aggregates position frequency, engine evaluations, best moves, and played move score losses into job report objects stored in `review_jobs`.
-4. **Cleanup**: Temp files and Supabase storage objects are removed upon job completion or failure.
+   - `ReviewReportBuilder` (`app/review/report.py`) walks the first `OPENING_REVIEW_MAX_PLIES` (default 20) plies of every game where the target player is White or Black (exact name match; games with a custom `FEN` setup are skipped), building one position tree per colour keyed by normalized FEN. Each position records occurrences, wins, draws, the moves played from it, and the line from the start position of the first game that reached it.
+   - Each unique position where the player is to move is evaluated once, after all games are collected, using `AnalysisChain`: `position_evals` cache first, then `CloudAnalyzer` (Lichess cloud eval), then `LocalAnalyzer` (Stockfish).
+   - Each distinct move the player played is scored by evaluating the position **after** the move and negating it (rather than a `root_moves` search), so cloud evals and the per-FEN cache apply. Playing the engine's best move scores a loss of 0; checkmate and other terminal positions are scored without the engine.
+3. **Mistake detection**: Evaluations are converted to centipawns (mates via the Lichess conversion, `(21 - min(10, |mate|)) * 100`) and then to winning chances with the Lichess formula `2 / (1 + exp(-0.00368208 * cp)) - 1`, clamped to ±1000 cp. The drop in winning chances is classified with the Lichess thresholds: ≥ 0.3 blunder, ≥ 0.2 mistake, ≥ 0.1 inaccuracy. Losses under 30 cp (`MIN_CP_LOSS`) are never flagged, as they are within engine noise at review depths. Only the reviewed player's moves are scored.
+4. **Report Generation**: The job's `report` holds a summary plus, per colour, mistake counts and the top 200 mistakes ranked by impact (`count × win_chance_loss`), so repeated mistakes rank above one-offs. Each mistake carries the line that reaches it. The full shape is documented in `app/review/report.py`.
+5. **Position storage**: The position tree is written to `review_positions`, one document per position (`app/review/store.py`), not onto the job. A tree grows by roughly 20 mostly unique positions per game (5,000 games ≈ 58,000 positions ≈ 20 MB), which would exceed MongoDB's 16 MB document limit on a single document, and would be too large for the browser to load at once. The frontend fetches positions as the user navigates: each position response includes the positions after its 8 most played moves, the client caches them (React Query), keeps one move ahead with a batch request, and loads a mistake's whole line in one batch request.
+6. **Cleanup**: Temp files and Supabase storage objects are removed upon job completion or failure.
 
 ---
 
@@ -189,6 +193,8 @@ GET /api/v1/games/<game_hash>/similar
 POST /api/v1/review (multipart/form-data: pgn_file, player)
 GET  /api/v1/review/<job_id>
 GET  /api/v1/review/<job_id>/reports
+GET  /api/v1/review/<job_id>/positions?color=<white|black>&fen=<fen>
+POST /api/v1/review/<job_id>/positions/batch (json: color, fens)
 
 # Health & Diagnostic
 GET /health
@@ -278,6 +284,7 @@ pgnseek/
 
 | Date | Section | Change | Reason |
 |---|---|---|---|
+| 2026-10-25 | Opening Review | Store position trees in `review_positions`; reviews expire after 7 days | Reports outgrew MongoDB's 16 MB document limit at ~2,000 games; per-position documents also support incremental syncs from Lichess / Chess.com later. |
 | 2026-07-28 | All | Complete update of DESIGN_DECISIONS.md | Sync document with current MongoDB Atlas, Celery/Redis, Supabase Storage, Stockfish Review Engine, and Vector Search implementation. |
 | 2026-07-20 | Data Layer | Migrated from Elasticsearch to MongoDB Atlas | Single datastore for text, vectors, and document storage with lower complexity. |
 | 2026-06-30 | Structure | Move Pydantic schemas into API/search feature modules | Keep code organized by responsibility. |

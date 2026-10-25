@@ -229,14 +229,16 @@ def resolve_intent(tokens: dict) -> dict:
 
     if "unmatched_words" in tokens:
         for word in tokens["unmatched_words"]:
-            must.append({
-                "bool": {
-                    "should": [
-                        {"match": {"white": {"query": word}}},
-                        {"match": {"black": {"query": word}}}
-                    ]
+            must.append(
+                {
+                    "bool": {
+                        "should": [
+                            {"match": {"white": {"query": word}}},
+                            {"match": {"black": {"query": word}}},
+                        ]
+                    }
                 }
-            })
+            )
 
     return {"must": must, "should": should, "filter": filters, "must_not": must_not}
 
@@ -268,16 +270,16 @@ def build_search_request(
     pattern_tokens = extract_patterns(query_string)
     keyword_tokens = extract_keywords(query_string)
     tokens = {**pattern_tokens, **keyword_tokens}
-    
+
     unmatched_words = get_unmatched_words(query_string, tokens)
     if unmatched_words:
         tokens["unmatched_words"] = unmatched_words
-        
+
     clauses = resolve_intent(tokens)
-    
+
     mongo_filter = {}
     and_conditions = []
-    
+
     def translate_clause(c):
         if "match" in c:
             for field, val in c["match"].items():
@@ -289,8 +291,10 @@ def build_search_request(
         elif "range" in c:
             for field, val in c["range"].items():
                 range_cond = {}
-                if "gte" in val: range_cond["$gte"] = val["gte"]
-                if "lte" in val: range_cond["$lte"] = val["lte"]
+                if "gte" in val:
+                    range_cond["$gte"] = val["gte"]
+                if "lte" in val:
+                    range_cond["$lte"] = val["lte"]
                 return {field: range_cond}
         elif "bool" in c:
             if "should" in c["bool"]:
@@ -300,29 +304,38 @@ def build_search_request(
                         inner_and = []
                         for ic in sc["bool"]["must"]:
                             tc = translate_clause(ic)
-                            if tc: inner_and.append(tc)
+                            if tc:
+                                inner_and.append(tc)
                         if inner_and:
-                            or_conds.append({"$and": inner_and} if len(inner_and) > 1 else inner_and[0])
+                            or_conds.append(
+                                {"$and": inner_and}
+                                if len(inner_and) > 1
+                                else inner_and[0]
+                            )
                     else:
                         tc = translate_clause(sc)
-                        if tc: or_conds.append(tc)
+                        if tc:
+                            or_conds.append(tc)
                 if or_conds:
                     return {"$or": or_conds}
         return None
 
     for c in clauses["must"]:
         tc = translate_clause(c)
-        if tc: and_conditions.append(tc)
-        
+        if tc:
+            and_conditions.append(tc)
+
     for c in clauses["filter"]:
         tc = translate_clause(c)
-        if tc: and_conditions.append(tc)
+        if tc:
+            and_conditions.append(tc)
 
     if clauses["should"]:
         should_conds = []
         for c in clauses["should"]:
             tc = translate_clause(c)
-            if tc: should_conds.append(tc)
+            if tc:
+                should_conds.append(tc)
         if should_conds:
             and_conditions.append({"$or": should_conds})
 
@@ -355,7 +368,7 @@ def build_search_request(
             "entered_endgame",
             "event",
             "pgn_moves",
-            "endgame_type"
+            "endgame_type",
         ],
         debug_tokens={
             "raw_query": query_string,

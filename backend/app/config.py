@@ -11,7 +11,6 @@ from pydantic import field_validator
 from functools import lru_cache
 from pathlib import Path
 
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
@@ -19,7 +18,7 @@ class Settings(BaseSettings):
     # MongoDB
     MONGODB_URI: str = ""
     MONGODB_DB: str = "pgnseek"
-    
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
@@ -46,6 +45,8 @@ class Settings(BaseSettings):
     DEFAULT_PAGE_SIZE: int = 20
     MAX_PAGE_SIZE: int = 100
     RATE_LIMIT_PER_MINUTE: int = 60
+    REVIEW_RATE_LIMIT_PER_MINUTE: int = 5
+    REVIEW_MAX_UPLOAD_BYTES: int = 5_000_000
     ALLOWED_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     # Caching
@@ -56,7 +57,8 @@ class Settings(BaseSettings):
     STOCKFISH_PATH: str | None = None
     OPENING_REVIEW_ENGINE_DEPTH: int = 12
     OPENING_REVIEW_MAX_PLIES: int = 20
-    LOCAL_TIMEOUT_SECONDS: float = 30.0 
+    REVIEW_TTL_SECONDS: int = 604_800
+    LOCAL_TIMEOUT_SECONDS: float = 30.0
     CLOUD_TIMEOUT_SECONDS: float = 10.0
 
     # Logging

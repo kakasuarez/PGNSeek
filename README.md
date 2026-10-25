@@ -7,7 +7,7 @@
 - Natural language search across chess games (e.g. `aggressive Sicilian white wins 2400+`, `French defense under 30 moves draw`).
 - Filter by opening, players, ratings, results, game length and playing style.
 - Find games similar to a given game using vector similarity search.
-- Opening review: upload your own PGN and get a per-position report of the moves you played, your results, and the engine's best move.
+- Opening review: upload your own PGN, explore the tree of positions you reached, and get a ranked list of the opening mistakes you keep repeating. Reviews are kept for 7 days.
 
 ## Architecture Overview
 
@@ -20,7 +20,7 @@ You can read more about the decisions made [here](DESIGN_DECISIONS.md).
 
 ## Prerequisites
 
-1. Python 3.12+ [Download here](https://www.python.org/downloads/)
+1. Python 3.12, the version used by the Docker image and the pinned requirements [Download here](https://www.python.org/downloads/)
 2. Node.js 22+ [Download here](https://nodejs.org/)
 3. Docker Desktop [Download here](https://www.docker.com/products/docker-desktop/)
 4. A MongoDB Atlas cluster (required for Vector Search)
@@ -41,12 +41,13 @@ You can read more about the decisions made [here](DESIGN_DECISIONS.md).
    }
    ```
    The text, TTL and status indexes are created automatically when the backend starts.
-4. Create the virtual environment and install dependencies:
+4. Create the virtual environment in `backend/.venv` (where `pyrightconfig.json` expects it) and install the dependencies:
    ```
-   python3 -m venv backend/venv
-   source backend/venv/bin/activate
-   pip install -r requirements.txt
+   python3.12 -m venv backend/.venv
+   source backend/.venv/bin/activate
+   pip install -r requirements-dev.txt
    ```
+   `requirements-dev.txt` adds the test and data tools to the runtime dependencies. Use `requirements.txt` for a runtime-only install, as the Docker image does.
 5. Ingest the PGN data. By default, put your PGN files in `data/pgn/`, then run:
    ```
    python pipeline/ingest.py
@@ -91,9 +92,18 @@ You can try out the APIs in the FastAPI documentation at `http://127.0.0.1:8000/
 | GET    | `/api/v1/games/{game_hash}/similar`    | Get games similar to the given game          |
 | POST   | `/api/v1/review`                       | Submit a PGN file + player name for review   |
 | GET    | `/api/v1/review/{job_id}`              | Get the status of a review job               |
-| GET    | `/api/v1/review/{job_id}/reports`      | Get the reports of a completed review job    |
+| GET    | `/api/v1/review/{job_id}/reports`      | Get the summary and top mistakes of a review |
+| GET    | `/api/v1/review/{job_id}/positions`    | Get one position and its most played children |
+| POST   | `/api/v1/review/{job_id}/positions/batch` | Get several positions, e.g. along a line  |
 
 ## Workflow
 
-1. To clear ingestion state and reprocess every PGN file, run `python pipeline/ingest.py --reset`. Games are keyed by a hash of their content, so re-ingesting does not create duplicates.
-2. `scripts/` contains maintenance utilities, e.g. `scripts/delete_last_n_games.py` to trim the `chess_games` collection.
+1. Run the backend tests (from `backend/`, with the venv active): `python -m pytest app/tests`.
+2. Dependencies are declared in `requirements.in` (runtime) and `requirements-dev.in` (tests and tooling), and pinned in the compiled `requirements.txt` and `requirements-dev.txt`. After editing a `.in` file, regenerate the pins with [uv](https://docs.astral.sh/uv/) and reinstall:
+   ```
+   uv pip compile requirements.in -o requirements.txt --python-version 3.12
+   uv pip compile requirements-dev.in -o requirements-dev.txt --python-version 3.12
+   pip install -r requirements-dev.txt
+   ```
+3. To clear ingestion state and reprocess every PGN file, run `python pipeline/ingest.py --reset`. Games are keyed by a hash of their content, so re-ingesting does not create duplicates.
+4. `scripts/` contains maintenance utilities, e.g. `scripts/delete_last_n_games.py` to trim the `chess_games` collection. Scripts use the database configured in `.env`; `delete_last_n_games.py` takes no arguments and deletes 50,000 games as soon as it runs.

@@ -19,9 +19,7 @@ class CloudAnalyzer(GameAnalyzer):
     def __init__(self):
         self.client = Analysis(TokenSession(""))
 
-    async def analyze(
-        self, board: chess.Board
-    ) -> AnalysisResult | None:
+    async def analyze(self, board: chess.Board) -> AnalysisResult | None:
 
         try:
             evaluation = await asyncio.wait_for(
