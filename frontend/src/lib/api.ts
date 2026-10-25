@@ -58,8 +58,8 @@ type ApiError = {
   detail?: Record<string, unknown>;
 };
 
-async function fetchJson<T>(path: string) {
-  const response = await fetch(`${API_URL}${path}`);
+async function fetchJson<T>(path: string, init?: RequestInit) {
+  const response = await fetch(`${API_URL}${path}`, init);
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`;
     try {
@@ -120,12 +120,12 @@ export type ReviewPlayedMove = {
 
 export type ReviewPosition = {
   fen: string;
+  color: "white" | "black";
   side_to_move: "white" | "black";
   player_to_move: boolean;
   occurrences: number;
   wins: number;
   draws: number;
-  line: string[];
   best_move: string | null;
   evaluation: (ReviewScore & { depth: number; source: string }) | null;
   played_moves: Record<string, ReviewPlayedMove>;
@@ -148,8 +148,9 @@ export type ReviewMistake = {
 export type ReviewRepertoire = {
   games: number;
   counts: Record<ReviewClassification, number>;
-  positions: Record<string, ReviewPosition>;
+  // Top mistakes by impact; counts and mistakes_total cover all of them
   mistakes: ReviewMistake[];
+  mistakes_total: number;
 };
 
 export type ReviewReport = {
@@ -185,4 +186,21 @@ export async function fetchReviewStatus(jobId: string) {
 
 export async function fetchReviewReports(jobId: string) {
   return fetchJson<{ job_id: string; report: ReviewReport }>(`/api/v1/review/${jobId}/reports`);
+}
+
+// The position tree is fetched per position, so large reviews never load in full.
+
+export async function fetchReviewPosition(jobId: string, color: "white" | "black", fen: string) {
+  const params = new URLSearchParams({ color, fen });
+  return fetchJson<{ position: ReviewPosition | null; children: ReviewPosition[] }>(
+    `/api/v1/review/${jobId}/positions?${params}`,
+  );
+}
+
+export async function fetchReviewPositions(jobId: string, color: "white" | "black", fens: string[]) {
+  return fetchJson<{ positions: Record<string, ReviewPosition> }>(`/api/v1/review/${jobId}/positions/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ color, fens }),
+  });
 }

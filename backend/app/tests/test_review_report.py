@@ -21,6 +21,8 @@ from app.review.report import (
 )
 from app.review.schemas import AnalysisResult, AnalysisScore
 from app.review.service import AnalyzerService
+from app.review.store import get_positions
+from app.tests.fake_mongo import FakeDB
 
 
 def make_game(
@@ -176,10 +178,10 @@ def test_builder_skips_other_players_and_custom_setups():
 
 
 class FakeService(AnalyzerService):
-    """AnalyzerService with the cached analyzer chain replaced by fixed evaluations."""
+    """AnalyzerService with the cached analyzer chain replaced by fixed evaluations, on an in-memory database."""
 
     def __init__(self, evaluations: dict[str, tuple[int, str | None]], max_plies: int):
-        super().__init__(db=None)  # type: ignore[arg-type]
+        super().__init__(db=FakeDB())  # type: ignore[arg-type]
         self.max_plies = max_plies
         self.evaluations = evaluations
         self.analyzed: list[str] = []
@@ -191,6 +193,13 @@ class FakeService(AnalyzerService):
             return None
         cp, best = self.evaluations[fen]
         return AnalysisResult(source="local_stockfish", depth=12, score=AnalysisScore(cp=cp), best_move_uci=best)
+
+    def review_and_load(self, games, player: str = "me", color: str = "white"):
+        """Run a review, then load the saved positions of one repertoire."""
+        report = asyncio.run(self.review(games, player, tree_id="job-1", expires_at=None))
+        fens = [d["fen"] for d in self.db["review_positions"].documents if d["color"] == color]
+        positions = asyncio.run(get_positions(self.db, "job-1", color, fens))
+        return report, positions
 
 
 def test_review_detects_and_ranks_recurring_mistakes():
@@ -212,7 +221,7 @@ def test_review_detects_and_ranks_recurring_mistakes():
         make_game("1. e4 e5 2. f3"),
     ]
 
-    report = asyncio.run(service.review(games, "me"))
+    report, positions = service.review_and_load(games)
     white = report["repertoires"]["white"]
 
     # Only the player's positions and the positions after non-best moves are analyzed
@@ -220,7 +229,8 @@ def test_review_detects_and_ranks_recurring_mistakes():
         [start, before_move_2, fen_after("e2e4", "e7e5", "d1h5"), fen_after("e2e4", "e7e5", "f2f3")]
     )
 
-    position = white["positions"][before_move_2]
+    position = positions[before_move_2]
+    assert "line" not in position  # only mistakes carry their line
     assert position["best_move"] == "g1f3"
     assert position["evaluation"] == {"cp": 40, "mate": None, "depth": 12, "source": "local_stockfish"}
     assert position["played_moves"]["g1f3"]["loss_cp"] == 0
@@ -238,14 +248,16 @@ def test_review_detects_and_ranks_recurring_mistakes():
     assert top["evaluation_after"] == {"cp": -150, "mate": None}
     assert top["impact"] == pytest.approx(2 * top["win_chance_loss"])
     assert white["counts"] == {"inaccuracy": 1, "mistake": 0, "blunder": 1}
+    assert white["mistakes_total"] == 2
+    assert "positions" not in white  # the tree is stored per position, not on the report
     assert report["summary"] == {"player": "me", "games_included": 4, "games_skipped": 0, "max_plies": 3}
 
 
 def test_review_survives_failed_analysis():
     # Nothing can be evaluated: the report still completes, unscored
     service = FakeService({}, max_plies=4)
-    report = asyncio.run(service.review([make_game("1. e4 e5 2. Nf3")], "me"))
-    start = report["repertoires"]["white"]["positions"][normalize_fen(chess.Board())]
+    report, positions = service.review_and_load([make_game("1. e4 e5 2. Nf3")])
+    start = positions[normalize_fen(chess.Board())]
     assert start["evaluation"] is None
     assert start["played_moves"] == {"e2e4": {"count": 1}}
     assert report["repertoires"]["white"]["mistakes"] == []

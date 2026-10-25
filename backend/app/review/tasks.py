@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 import tempfile
 import structlog
 from celery import Celery
@@ -58,11 +59,13 @@ async def process_job(job: ReviewJob):
         
         service = AnalyzerService(db)
         
-        report = await service.review(source.iter_games(), player)
+        # The review lives for REVIEW_TTL_SECONDS from completion; positions expire with the job
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.REVIEW_TTL_SECONDS)
+        report = await service.review(source.iter_games(), player, tree_id=job_id, expires_at=expires_at)
 
         await db.review_jobs.update_one(
             {"_id": job_id},
-            {"$set": {"status": "completed", "report": report}}
+            {"$set": {"status": "completed", "report": report, "expires_at": expires_at}}
         )
         log.info("task_review_opening_completed", job_id=job_id)
         

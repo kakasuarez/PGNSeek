@@ -41,6 +41,12 @@ async def lifespan(app: FastAPI):
     await db["chess_games"].create_index([("black", ASCENDING)])
     await db["lichess_cache"].create_index([("fetched_at", ASCENDING)], expireAfterSeconds=604800)
     await db["review_jobs"].create_index([("status", ASCENDING)])
+    # Reviews expire at their `expires_at`; documents without the field never expire
+    await db["review_jobs"].create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
+    await db["review_positions"].create_index(
+        [("tree_id", ASCENDING), ("color", ASCENDING), ("fen", ASCENDING)], unique=True
+    )
+    await db["review_positions"].create_index([("expires_at", ASCENDING)], expireAfterSeconds=0)
     
     yield
     # Shutdown

@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     STOCKFISH_PATH: str | None = None
     OPENING_REVIEW_ENGINE_DEPTH: int = 12
     OPENING_REVIEW_MAX_PLIES: int = 20
+    REVIEW_TTL_SECONDS: int = 604_800
     LOCAL_TIMEOUT_SECONDS: float = 30.0 
     CLOUD_TIMEOUT_SECONDS: float = 10.0
 

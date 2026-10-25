@@ -13,16 +13,20 @@ Report shape (stored on the review job as `report`):
     "repertoires": {
         "white" | "black": {
         "games": int,
-        "counts": {"inaccuracy": n, "mistake": n, "blunder": n},
-        "positions": {fen: Position},
-        "mistakes": [Mistake, ...]   # ranked by impact, highest first
+        "counts": {"inaccuracy": n, "mistake": n, "blunder": n},   # over all mistakes
+        "mistakes": [Mistake, ...],   # top MAX_MISTAKES, ranked by impact, highest first
+        "mistakes_total": int
         }
     }
     }
 
+The position tree is not part of the report: it can outgrow MongoDB's 16 MB
+document limit, so each position is stored separately (see app/review/store.py).
+
 Position:
     fen, side_to_move, player_to_move, occurrences, wins, draws,
     line         — UCI moves from the start position of the first game that reached it
+                   (kept in memory to build mistakes; not stored with the position)
     best_move    — engine best move (player-to-move positions only)
     evaluation   — {cp, mate, depth, source} (player-to-move positions only)
     played_moves — {uci: {count, evaluation, loss_cp, win_chance_loss, classification}}
@@ -49,6 +53,8 @@ from app.review.schemas import AnalysisResult, AnalysisScore
 CLASSIFICATION_THRESHOLDS = [(0.3, "blunder"), (0.2, "mistake"), (0.1, "inaccuracy")]
 # Smaller losses are within engine noise at review depths
 MIN_CP_LOSS = 30
+# Mistakes stored on the report per colour; counts still cover all of them
+MAX_MISTAKES = 200
 
 
 # -- Scoring -------------------------------------------------------------------
@@ -187,6 +193,12 @@ class ReviewReportBuilder:
             line.append(move.uci())
         return True
 
+    def positions(self) -> Iterator[tuple[str, dict[str, Any]]]:
+        """All positions, as (colour, position) pairs."""
+        for color, repertoire in self.repertoires.items():
+            for position in repertoire["positions"].values():
+                yield color, position
+
     def player_positions(self) -> Iterator[dict[str, Any]]:
         """Positions where the player is to move, i.e. the ones to evaluate."""
         for repertoire in self.repertoires.values():
@@ -234,8 +246,8 @@ class ReviewReportBuilder:
             repertoires[color] = {
                 "games": repertoire["games"],
                 "counts": counts,
-                "positions": repertoire["positions"],
-                "mistakes": mistakes,
+                "mistakes": mistakes[:MAX_MISTAKES],
+                "mistakes_total": len(mistakes),
             }
         return {
             "summary": {

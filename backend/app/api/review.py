@@ -1,15 +1,22 @@
 """
 app/api/review.py
 
-Opening review endpoint.
-    POST /api/v1/review  —  submit a PGN file for opening analysis
+Opening review endpoints.
+    POST /api/v1/review                              —  submit a PGN file for opening analysis
+    GET  /api/v1/review/{job_id}                     —  job status
+    GET  /api/v1/review/{job_id}/reports             —  summary and ranked mistakes
+    GET  /api/v1/review/{job_id}/positions           —  one position plus its most played children
+    POST /api/v1/review/{job_id}/positions/batch     —  several positions, e.g. along a line
 """
 
 import structlog
-from typing import cast
+from datetime import datetime, timedelta, timezone
+from typing import Literal, cast
 from uuid import UUID
 
-from fastapi import UploadFile, Form, APIRouter, Depends, HTTPException, Request
+import chess
+from fastapi import UploadFile, Form, APIRouter, Depends, HTTPException, Request, Query
+from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from supabase import create_client, Client
@@ -19,6 +26,8 @@ from app.review.schemas import (
     ReviewJob,
 )
 from app.review.tasks import review_opening_task as review_opening
+from app.review.report import normalize_fen
+from app.review.store import get_position_with_children, get_positions
 from app.db import get_db
 from app.config import settings
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -30,6 +39,33 @@ limiter = Limiter(key_func=get_remote_address)
 
 # Initialize Supabase client
 supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+
+
+# A mistake's line is at most OPENING_REVIEW_MAX_PLIES long, so batches stay small
+MAX_BATCH_FENS = 64
+
+Color = Literal["white", "black"]
+
+
+class PositionsBatchRequest(BaseModel):
+    color: Color
+    fens: list[str] = Field(max_length=MAX_BATCH_FENS)
+
+
+def _normalize_fen(fen: str) -> str:
+    try:
+        return normalize_fen(chess.Board(fen))
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid FEN: {fen}")
+
+
+async def _completed_job(db: AsyncIOMotorDatabase, job_id: UUID, projection: dict | None = None) -> dict:
+    job = await db.review_jobs.find_one({"_id": str(job_id)}, projection)
+    if not job:
+        raise HTTPException(status_code=404, detail="Review job not found")
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Review job is not completed yet")
+    return job
 
 
 # @router.get("/review/debug/counts")
@@ -53,17 +89,44 @@ async def review_status(job_id: UUID, db: AsyncIOMotorDatabase = Depends(get_db)
 
 @router.get("/review/{job_id}/reports")
 async def review_reports(job_id: UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
-    job = await db.review_jobs.find_one({"_id": str(job_id)})
-    if not job:
-        raise HTTPException(status_code=404, detail="Review job not found")
-    if job.get("status") != "completed":
-        raise HTTPException(status_code=400, detail="Review job is not completed yet")
-    
+    job = await _completed_job(db, job_id)
     report = job.get("report")
     if report is None:
         raise HTTPException(status_code=404, detail="Report not found for this job")
 
     return {"job_id": job_id, "report": report}
+
+
+@router.get(
+    "/review/{job_id}/positions",
+    summary="Get a position from a review's tree",
+    description=(
+        "Returns the position (null if no game reached it) and the positions after its "
+        "most played moves, so the client can prefetch them."
+    ),
+)
+async def review_position(
+    job_id: UUID,
+    color: Color = Query(description="Repertoire: the colour the player had"),
+    fen: str = Query(description="Position FEN; move clocks are optional"),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    await _completed_job(db, job_id, {"status": 1})
+    position, children = await get_position_with_children(db, str(job_id), color, _normalize_fen(fen))
+    return {"position": position, "children": children}
+
+
+@router.post(
+    "/review/{job_id}/positions/batch",
+    summary="Get several positions from a review's tree",
+    description="Returns the positions found, keyed by normalized FEN. FENs no game reached are left out.",
+)
+async def review_positions_batch(
+    job_id: UUID, body: PositionsBatchRequest, db: AsyncIOMotorDatabase = Depends(get_db)
+):
+    await _completed_job(db, job_id, {"status": 1})
+    fens = [_normalize_fen(fen) for fen in body.fens]
+    return {"positions": await get_positions(db, str(job_id), body.color, fens)}
 
 
 @router.post(
@@ -113,7 +176,9 @@ async def review(
         # Update job with the actual object key
         job.source_config.temp_file = object_key
         
-        await db.review_jobs.insert_one({"_id": str(job.job_id), "status": "queued"})
+        # Jobs that never complete still expire; the worker resets this on completion
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.REVIEW_TTL_SECONDS)
+        await db.review_jobs.insert_one({"_id": str(job.job_id), "status": "queued", "expires_at": expires_at})
         review_opening_task = cast(Task, review_opening)
         review_opening_task.delay(job.model_dump(mode="json"))
         

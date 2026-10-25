@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -9,14 +10,45 @@ import {
   submitReview,
   fetchReviewStatus,
   fetchReviewReports,
+  fetchReviewPosition,
+  fetchReviewPositions,
   type ReviewClassification,
   type ReviewMistake,
+  type ReviewPosition,
   type ReviewReport,
 } from "@/lib/api";
-import { formatEval, formatMoveNumber, toMoveObject, uciToSan } from "@/lib/chess";
+import {
+  childFens,
+  formatEval,
+  formatMoveNumber,
+  lineFens,
+  normalizeFen,
+  toMoveObject,
+  uciToSan,
+} from "@/lib/chess";
 import { useKeyboardShortcuts } from "@/components/game/use-keyboard-shortcuts";
 
 type Color = "white" | "black";
+
+// Children prefetched per position, most played first (matches the backend's MAX_CHILDREN)
+const PREFETCH_CHILDREN = 8;
+
+// Cached per position; null means no game reached it. A review's tree never changes, so it never goes stale.
+function positionKey(jobId: string | null, color: Color, fen: string) {
+  return ["review-position", jobId, color, fen] as const;
+}
+
+// Fetches the positions not yet cached and caches them, including null for those no game reached
+async function prefetchPositions(queryClient: QueryClient, jobId: string, color: Color, fens: string[]) {
+  const missing = [...new Set(fens)].filter(
+    (fen) => queryClient.getQueryData(positionKey(jobId, color, fen)) === undefined,
+  );
+  if (missing.length === 0) return;
+  const { positions } = await fetchReviewPositions(jobId, color, missing);
+  for (const fen of missing) {
+    queryClient.setQueryData(positionKey(jobId, color, fen), positions[fen] ?? null);
+  }
+}
 
 const CLASSIFICATION_STYLES: Record<ReviewClassification, string> = {
   inaccuracy: "border-[rgba(251,191,36,0.3)] bg-[rgba(251,191,36,0.12)] text-[var(--warning)]",
@@ -69,12 +101,40 @@ export function ReviewPage() {
 
   const currentFen = historyFens[plyIndex];
 
-  const currentNormalizedFen = useMemo(() => {
-    return currentFen.split(" ").slice(0, 4).join(" ");
-  }, [currentFen]);
+  const currentNormalizedFen = useMemo(() => normalizeFen(currentFen), [currentFen]);
 
+  const queryClient = useQueryClient();
   const repertoire = report?.repertoires[color];
-  const currentStats = repertoire?.positions[currentNormalizedFen];
+
+  const positionQuery = useQuery({
+    queryKey: positionKey(jobId, color, currentNormalizedFen),
+    queryFn: async (): Promise<ReviewPosition | null> => {
+      const { position, children } = await fetchReviewPosition(jobId!, color, currentNormalizedFen);
+      // The response also carries the most played next positions: cache them so clicking one is instant
+      for (const child of children) {
+        if (queryClient.getQueryData(positionKey(jobId, color, child.fen)) === undefined) {
+          queryClient.setQueryData(positionKey(jobId, color, child.fen), child);
+        }
+      }
+      return position;
+    },
+    enabled: !!report && !!jobId,
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
+  });
+  const currentStats = positionQuery.data;
+
+  // Keep one move ahead: when the current position came from the cache, its children may not be cached yet
+  useEffect(() => {
+    if (!jobId || !currentStats) return;
+    const moves = Object.entries(currentStats.played_moves)
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, PREFETCH_CHILDREN)
+      .map(([uci]) => uci);
+    prefetchPositions(queryClient, jobId, color, childFens(currentStats.fen, moves)).catch((err) =>
+      console.error(err),
+    );
+  }, [currentStats, jobId, color, queryClient]);
 
   useEffect(() => {
     if (!jobId || status === "completed" || status === "failed" || status === "error") return;
@@ -168,8 +228,14 @@ export function ReviewPage() {
     setPlyIndex(fens.length - 1);
   }
 
-  function openMistake(mistake: ReviewMistake) {
+  async function openMistake(mistake: ReviewMistake) {
     setFocusedMistake(mistake);
+    // One request for every position along the line, so stepping through it needs no more
+    try {
+      await prefetchPositions(queryClient, jobId!, color, lineFens(mistake.line));
+    } catch (err) {
+      console.error(err);
+    }
     loadLine(mistake.line);
   }
 
@@ -366,6 +432,11 @@ export function ReviewPage() {
                   })}
                 </ul>
               )}
+              {repertoire.mistakes_total > repertoire.mistakes.length && (
+                <div className="mt-2 text-xs text-[var(--muted)]">
+                  Showing the top {repertoire.mistakes.length} of {repertoire.mistakes_total} by impact.
+                </div>
+              )}
             </Card>
 
             <Card className="rounded-xl border border-white/10 bg-[rgba(16,22,29,0.72)] p-6 text-[var(--muted)]">
@@ -432,6 +503,10 @@ export function ReviewPage() {
                     </ul>
                   </div>
                 </div>
+              ) : positionQuery.isPending ? (
+                <div className="text-sm italic text-white/50">Loading position…</div>
+              ) : positionQuery.isError ? (
+                <div className="text-sm text-red-300">Could not load this position: {positionQuery.error.message}</div>
               ) : (
                 <div className="text-sm italic text-white/50">
                   No games reached this position.

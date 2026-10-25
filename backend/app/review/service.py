@@ -6,11 +6,13 @@ Opening review service.
 
 import chess
 import structlog
+from datetime import datetime
 from typing import Any, Iterable
 from chess.pgn import Game
 from app.config import settings
 from app.review.schemas import AnalysisResult, AnalysisScore
 from app.review.report import ReviewReportBuilder, normalize_fen, score_move
+from app.review.store import save_positions
 from app.review.analyzers.chain import AnalysisChain
 from app.review.analyzers.cloud import CloudAnalyzer
 from app.review.analyzers.local import LocalAnalyzer
@@ -75,8 +77,19 @@ class AnalyzerService:
             log.warning("review_analysis_no_result", fen=fen)
         return result
 
-    async def review(self, games: Iterable[Game | None], player: str) -> dict[str, Any]:
-        """Build the opening review report for `player` from their games."""
+    async def review(
+        self,
+        games: Iterable[Game | None],
+        player: str,
+        tree_id: str,
+        expires_at: datetime | None,
+    ) -> dict[str, Any]:
+        """
+        Build the opening review for `player` from their games.
+
+        Saves the position tree under `tree_id` and returns the report
+        (summary and ranked mistakes) to store on the job.
+        """
         builder = ReviewReportBuilder(player, self.max_plies)
         for game in games:
             if game is None:
@@ -108,9 +121,12 @@ class AnalyzerService:
                 played.update(score_move(best.score, after_move))
 
         report = builder.finish()
+        saved = await save_positions(self.db, tree_id, builder.positions(), expires_at)
         log.info(
             "review_report_built",
             player=player,
+            tree_id=tree_id,
+            positions_saved=saved,
             games_included=builder.games_included,
             games_skipped=builder.games_skipped,
             counts={color: r["counts"] for color, r in report["repertoires"].items()},

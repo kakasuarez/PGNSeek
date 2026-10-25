@@ -7,7 +7,7 @@
 - Natural language search across chess games (e.g. `aggressive Sicilian white wins 2400+`, `French defense under 30 moves draw`).
 - Filter by opening, players, ratings, results, game length and playing style.
 - Find games similar to a given game using vector similarity search.
-- Opening review: upload your own PGN and get a per-position report of the moves you played, your results, and the engine's best move.
+- Opening review: upload your own PGN, explore the tree of positions you reached, and get a ranked list of the opening mistakes you keep repeating. Reviews are kept for 7 days.
 
 ## Architecture Overview
 
@@ -91,7 +91,9 @@ You can try out the APIs in the FastAPI documentation at `http://127.0.0.1:8000/
 | GET    | `/api/v1/games/{game_hash}/similar`    | Get games similar to the given game          |
 | POST   | `/api/v1/review`                       | Submit a PGN file + player name for review   |
 | GET    | `/api/v1/review/{job_id}`              | Get the status of a review job               |
-| GET    | `/api/v1/review/{job_id}/reports`      | Get the reports of a completed review job    |
+| GET    | `/api/v1/review/{job_id}/reports`      | Get the summary and top mistakes of a review |
+| GET    | `/api/v1/review/{job_id}/positions`    | Get one position and its most played children |
+| POST   | `/api/v1/review/{job_id}/positions/batch` | Get several positions, e.g. along a line  |
 
 ## Workflow
 

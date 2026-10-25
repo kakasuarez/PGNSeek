@@ -67,3 +67,38 @@ export function formatEval(score: { cp: number | null; mate: number | null } | n
   const pawns = score.cp / 100;
   return `${pawns > 0 ? "+" : ""}${pawns.toFixed(1)}`;
 }
+
+// Position key used by the review tree: FEN without the move clocks
+export function normalizeFen(fen: string) {
+  return fen.split(" ").slice(0, 4).join(" ");
+}
+
+// Normalized FENs reached from `fen` by each of the given UCI moves
+export function childFens(fen: string, ucis: string[]) {
+  const fens: string[] = [];
+  for (const uci of ucis) {
+    try {
+      const chess = new Chess(fen);
+      chess.move(toMoveObject(uci));
+      fens.push(normalizeFen(chess.fen()));
+    } catch {
+      // skip moves that are illegal in this position
+    }
+  }
+  return fens;
+}
+
+// Normalized FENs of every position along a line from the start position, including the final one
+export function lineFens(line: string[]) {
+  const chess = new Chess();
+  const fens = [normalizeFen(chess.fen())];
+  for (const uci of line) {
+    try {
+      chess.move(toMoveObject(uci));
+    } catch {
+      break;
+    }
+    fens.push(normalizeFen(chess.fen()));
+  }
+  return fens;
+}
