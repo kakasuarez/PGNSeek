@@ -5,19 +5,46 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { submitReview, fetchReviewStatus, fetchReviewReports } from "@/lib/api";
-import { formatMoveNumber } from "@/lib/chess";
+import {
+  submitReview,
+  fetchReviewStatus,
+  fetchReviewReports,
+  type ReviewClassification,
+  type ReviewMistake,
+  type ReviewReport,
+} from "@/lib/api";
+import { formatEval, formatMoveNumber, toMoveObject, uciToSan } from "@/lib/chess";
 import { useKeyboardShortcuts } from "@/components/game/use-keyboard-shortcuts";
 
-type Bucket = {
-  fen: string;
-  side_to_move: "white" | "black";
-  occurrences: number;
-  wins: number;
-  draws: number;
-  played_moves: Record<string, number>;
-  best_move: string | Record<string, any>;
+type Color = "white" | "black";
+
+const CLASSIFICATION_STYLES: Record<ReviewClassification, string> = {
+  inaccuracy: "border-[rgba(251,191,36,0.3)] bg-[rgba(251,191,36,0.12)] text-[var(--warning)]",
+  mistake: "border-[rgba(251,146,60,0.35)] bg-[rgba(251,146,60,0.14)] text-orange-300",
+  blunder: "border-[rgba(248,113,113,0.4)] bg-[rgba(248,113,113,0.15)] text-red-300",
 };
+
+const CLASSIFICATIONS: ReviewClassification[] = ["blunder", "mistake", "inaccuracy"];
+
+const PLURALS: Record<ReviewClassification, string> = {
+  inaccuracy: "inaccuracies",
+  mistake: "mistakes",
+  blunder: "blunders",
+};
+
+function ClassificationChip({ classification, count }: { classification: ReviewClassification; count?: number }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-[0.08em] ${CLASSIFICATION_STYLES[classification]}`}
+    >
+      {count !== undefined ? `${count} ${count === 1 ? classification : PLURALS[classification]}` : classification}
+    </span>
+  );
+}
+
+function formatLoss(lossCp: number) {
+  return `-${(lossCp / 100).toFixed(1)}`;
+}
 
 export function ReviewPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -25,9 +52,11 @@ export function ReviewPage() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [rawReports, setRawReports] = useState<any[]>([]);
-  const [boardOrientation, setBoardOrientation] = useState<"white" | "black">("white");
-  
+  const [report, setReport] = useState<ReviewReport | null>(null);
+  const [color, setColor] = useState<Color>("white");
+  // The mistake last opened from the list, drawn as a red arrow while its position is on the board
+  const [focusedMistake, setFocusedMistake] = useState<ReviewMistake | null>(null);
+
   const [historyFens, setHistoryFens] = useState<string[]>([new Chess().fen()]);
   const [historySans, setHistorySans] = useState<string[]>([]);
   const [plyIndex, setPlyIndex] = useState(0);
@@ -44,37 +73,8 @@ export function ReviewPage() {
     return currentFen.split(" ").slice(0, 4).join(" ");
   }, [currentFen]);
 
-  const aggregated = useMemo(() => {
-    const agg: Record<string, Bucket> = {};
-    for (const report of rawReports) {
-      if (report.color !== boardOrientation) continue;
-      for (const [fenKey, bucket] of Object.entries(report.buckets) as [string, Bucket][]) {
-        if (!agg[fenKey]) {
-          agg[fenKey] = {
-            fen: bucket.fen,
-            side_to_move: bucket.side_to_move,
-            occurrences: 0,
-            wins: 0,
-            draws: 0,
-            played_moves: {},
-            best_move: bucket.best_move,
-          };
-        }
-        agg[fenKey].occurrences += bucket.occurrences;
-        agg[fenKey].wins += bucket.wins;
-        agg[fenKey].draws += bucket.draws;
-        for (const [move, count] of Object.entries(bucket.played_moves)) {
-          agg[fenKey].played_moves[move] = (agg[fenKey].played_moves[move] || 0) + (count as number);
-        }
-        if (!agg[fenKey].best_move && bucket.best_move && Object.keys(bucket.best_move).length > 0) {
-          agg[fenKey].best_move = bucket.best_move;
-        }
-      }
-    }
-    return agg;
-  }, [rawReports, boardOrientation]);
-
-  const currentStats = aggregated[currentNormalizedFen];
+  const repertoire = report?.repertoires[color];
+  const currentStats = repertoire?.positions[currentNormalizedFen];
 
   useEffect(() => {
     if (!jobId || status === "completed" || status === "failed" || status === "error") return;
@@ -88,7 +88,9 @@ export function ReviewPage() {
         }
         if (res.status === "completed") {
           const reportRes = await fetchReviewReports(jobId);
-          setRawReports(reportRes.reports);
+          const { white, black } = reportRes.report.repertoires;
+          setColor(black.games > white.games ? "black" : "white");
+          setReport(reportRes.report);
         }
       } catch (err) {
         console.error(err);
@@ -148,12 +150,57 @@ export function ReviewPage() {
     setPlyIndex(0);
   }
 
+  // Replays a line of UCI moves from the start position onto the board
+  function loadLine(line: string[]) {
+    const chess = new Chess();
+    const fens = [chess.fen()];
+    const sans: string[] = [];
+    for (const uci of line) {
+      try {
+        sans.push(chess.move(toMoveObject(uci)).san);
+      } catch {
+        break;
+      }
+      fens.push(chess.fen());
+    }
+    setHistoryFens(fens);
+    setHistorySans(sans);
+    setPlyIndex(fens.length - 1);
+  }
+
+  function openMistake(mistake: ReviewMistake) {
+    setFocusedMistake(mistake);
+    loadLine(mistake.line);
+  }
+
+  function switchRepertoire(next: Color) {
+    setColor(next);
+    setFocusedMistake(null);
+    resetBoard();
+  }
+
+  const arrows = useMemo(() => {
+    const result: [string, string, string][] = [];
+    if (currentStats?.best_move) {
+      result.push([currentStats.best_move.substring(0, 2), currentStats.best_move.substring(2, 4), "rgba(110, 231, 183, 0.75)"]);
+    }
+    if (focusedMistake && focusedMistake.fen === currentNormalizedFen) {
+      result.push([focusedMistake.move.substring(0, 2), focusedMistake.move.substring(2, 4), "rgba(248, 113, 113, 0.75)"]);
+    }
+    return result;
+  }, [currentStats, focusedMistake, currentNormalizedFen]);
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div>
         <h1 className="text-3xl font-semibold text-white">Opening Review</h1>
         <p className="mt-2 text-sm text-[var(--muted)]">
-          Upload your PGN to build an opening tree and review your lines.
+          {report
+            ? `${report.summary.player}: ${report.summary.games_included} games reviewed, first ${report.summary.max_plies} plies` +
+              (report.summary.games_skipped > 0
+                ? ` · ${report.summary.games_skipped} skipped (player not found or custom start position)`
+                : "")
+            : "Upload your PGN to build an opening tree and find the mistakes you keep repeating."}
         </p>
       </div>
 
@@ -167,9 +214,9 @@ export function ReviewPage() {
           <form onSubmit={handleUpload} className="flex flex-col gap-4 max-w-md">
             <div>
               <label className="block text-sm text-[var(--muted)] mb-1">PGN File</label>
-              <input 
-                type="file" 
-                accept=".pgn" 
+              <input
+                type="file"
+                accept=".pgn"
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
                 className="text-sm text-white"
                 required
@@ -177,16 +224,16 @@ export function ReviewPage() {
             </div>
             <div>
               <label className="block text-sm text-[var(--muted)] mb-1">Player Name</label>
-              <input 
-                type="text" 
-                value={player} 
+              <input
+                type="text"
+                value={player}
                 onChange={(e) => setPlayer(e.target.value)}
                 className="w-full rounded-md border border-white/10 bg-transparent px-3 py-2 text-sm text-white"
                 placeholder="Your username"
                 required
               />
             </div>
-            <button 
+            <button
               type="submit"
               className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-black transition hover:opacity-90"
             >
@@ -194,30 +241,37 @@ export function ReviewPage() {
             </button>
           </form>
         </Card>
-      ) : status !== "completed" ? (
+      ) : status !== "completed" || !report || !repertoire ? (
         <Card className="rounded-xl border border-white/10 bg-[rgba(16,22,29,0.72)] p-6">
           <div className="text-sm text-white">Job Status: <span className="font-semibold text-[var(--accent)]">{status}</span></div>
         </Card>
       ) : (
         <div className="flex flex-col gap-6 lg:flex-row">
           <div className="w-full max-w-[480px] shrink-0 space-y-4">
-            <Chessboard 
-              position={currentFen} 
-              onPieceDrop={onDrop} 
-              boardOrientation={boardOrientation}
+            <div className="flex gap-2" role="group" aria-label="Repertoire">
+              {(["white", "black"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => switchRepertoire(option)}
+                  aria-pressed={color === option}
+                  className={`flex-1 rounded-md border px-3 py-1.5 text-sm transition ${
+                    color === option
+                      ? "border-[rgba(110,231,183,0.35)] bg-[var(--accent-muted)] text-white"
+                      : "border-white/10 text-[var(--muted)] hover:bg-white/5 hover:text-white"
+                  }`}
+                >
+                  As {option === "white" ? "White" : "Black"} ({report.repertoires[option].games})
+                </button>
+              ))}
+            </div>
+            <Chessboard
+              position={currentFen}
+              onPieceDrop={onDrop}
+              boardOrientation={color}
               customDarkSquareStyle={{ backgroundColor: "#3f4a56" }}
               customLightSquareStyle={{ backgroundColor: "#e0e3e6" }}
-              customArrows={
-                typeof currentStats?.best_move === "string" && currentStats.best_move
-                  ? [
-                      [
-                        currentStats.best_move.substring(0, 2),
-                        currentStats.best_move.substring(2, 4),
-                        "rgba(110, 231, 183, 0.75)"
-                      ] as any
-                    ]
-                  : []
-              }
+              customArrows={arrows as any}
             />
             <div className="flex items-center justify-between gap-3">
               <div className="flex gap-2">
@@ -240,24 +294,151 @@ export function ReviewPage() {
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => setBoardOrientation(boardOrientation === "white" ? "black" : "white")}
-                  className="rounded-md border border-white/10 px-3 py-1.5 text-sm text-white hover:bg-white/5 transition"
-                >
-                  Flip Board
-                </button>
-                <button 
-                  onClick={resetBoard}
-                  className="rounded-md border border-white/10 px-3 py-1.5 text-sm text-white hover:bg-white/5 transition"
-                >
-                  Reset
-                </button>
-              </div>
+              <button
+                onClick={resetBoard}
+                className="rounded-md border border-white/10 px-3 py-1.5 text-sm text-white hover:bg-white/5 transition"
+              >
+                Reset
+              </button>
             </div>
           </div>
-          
-          <div className="flex flex-1 flex-col gap-6">
+
+          <div className="flex min-w-0 flex-1 flex-col gap-6">
+            <Card className="rounded-xl border border-white/10 bg-[rgba(16,22,29,0.72)] p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-white">Your recurring mistakes</h2>
+                <div className="flex flex-wrap gap-1.5">
+                  {CLASSIFICATIONS.map((classification) => (
+                    <ClassificationChip
+                      key={classification}
+                      classification={classification}
+                      count={repertoire.counts[classification]}
+                    />
+                  ))}
+                </div>
+              </div>
+              <Separator className="mb-3 border-white/10" />
+              {repertoire.games === 0 ? (
+                <div className="text-sm italic text-[var(--muted)]">
+                  No games as {color} in this PGN.
+                </div>
+              ) : repertoire.mistakes.length === 0 ? (
+                <div className="text-sm italic text-[var(--muted)]">
+                  No mistakes found in the first {report.summary.max_plies} plies.
+                </div>
+              ) : (
+                <ul className="max-h-[280px] space-y-1.5 overflow-y-auto pr-1">
+                  {repertoire.mistakes.map((mistake) => {
+                    const ply = mistake.line.length + 1;
+                    const isFocused =
+                      focusedMistake?.fen === mistake.fen && focusedMistake.move === mistake.move;
+                    return (
+                      <li key={`${mistake.fen}|${mistake.move}`}>
+                        <button
+                          type="button"
+                          onClick={() => openMistake(mistake)}
+                          className={`flex w-full flex-col gap-1 rounded-md border px-3 py-2 text-left text-sm transition hover:cursor-pointer sm:flex-row sm:items-center sm:justify-between sm:gap-3 ${
+                            isFocused
+                              ? "border-[rgba(110,231,183,0.35)] bg-[var(--accent-muted)]"
+                              : "border-white/6 bg-white/4 hover:bg-white/8"
+                          }`}
+                        >
+                          <span className="whitespace-nowrap">
+                            <span className="font-mono font-medium text-white">
+                              {formatMoveNumber(ply)} {uciToSan(mistake.fen, mistake.move)}
+                            </span>
+                            {mistake.best_move && (
+                              <span className="ml-2 text-[var(--muted)]">
+                                best <span className="font-mono text-[var(--accent)]">{uciToSan(mistake.fen, mistake.best_move)}</span>
+                              </span>
+                            )}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-3 whitespace-nowrap text-[var(--muted)]">
+                            <span>{mistake.count}×</span>
+                            <span className="font-mono">
+                              {formatEval(mistake.evaluation_before)} → {formatEval(mistake.evaluation_after)}
+                            </span>
+                            <ClassificationChip classification={mistake.classification} />
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </Card>
+
+            <Card className="rounded-xl border border-white/10 bg-[rgba(16,22,29,0.72)] p-6 text-[var(--muted)]">
+              <h2 className="text-xl font-semibold text-white mb-4">Position Statistics</h2>
+              {currentStats ? (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                    <div>Occurrences: <span className="text-white font-mono">{currentStats.occurrences}</span></div>
+                    <div>Win Rate: <span className="text-white font-mono">{Math.round((currentStats.wins / currentStats.occurrences) * 100)}%</span></div>
+                    <div>Draw Rate: <span className="text-white font-mono">{Math.round((currentStats.draws / currentStats.occurrences) * 100)}%</span></div>
+                  </div>
+
+                  {currentStats.player_to_move && currentStats.evaluation && (
+                    <div className="text-sm">
+                      Evaluation (for you):{" "}
+                      <span className="text-white font-mono">{formatEval(currentStats.evaluation)}</span>
+                      {currentStats.best_move && (
+                        <>
+                          <span className="mx-2">·</span>
+                          Engine best move:{" "}
+                          <span className="text-[var(--accent)] font-semibold font-mono">
+                            {uciToSan(currentStats.fen, currentStats.best_move)}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {!currentStats.player_to_move && (
+                    <div className="text-sm">Your opponents' replies in this position:</div>
+                  )}
+
+                  <div>
+                    <h3 className="text-sm font-semibold text-white mb-2 border-b border-white/10 pb-1">Played Moves</h3>
+                    <ul className="space-y-1">
+                      {Object.entries(currentStats.played_moves)
+                        .sort((a, b) => b[1].count - a[1].count)
+                        .map(([move, played]) => (
+                        <li key={move} className="text-sm">
+                          <button
+                            type="button"
+                            onClick={() => playMove(move)}
+                            className="flex w-full items-center justify-between gap-3 rounded bg-white/5 px-2 py-1 text-left transition hover:bg-white/10 hover:cursor-pointer"
+                            aria-label={`Play ${uciToSan(currentStats.fen, move)}`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <span className="font-mono text-white">{uciToSan(currentStats.fen, move)}</span>
+                              {move === currentStats.best_move && (
+                                <span className="text-[11px] uppercase tracking-[0.08em] text-[var(--accent)]">best</span>
+                              )}
+                              {played.classification && <ClassificationChip classification={played.classification} />}
+                            </span>
+                            <span className="flex flex-wrap items-center justify-end gap-x-3">
+                              {played.evaluation && (
+                                <span className="whitespace-nowrap font-mono">
+                                  {formatEval(played.evaluation)}
+                                  {played.loss_cp ? ` (${formatLoss(played.loss_cp)})` : ""}
+                                </span>
+                              )}
+                              <span className="whitespace-nowrap">{played.count} {played.count === 1 ? "time" : "times"} ({Math.round((played.count / currentStats.occurrences) * 100)}%)</span>
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm italic text-white/50">
+                  No games reached this position.
+                </div>
+              )}
+            </Card>
+
             <Card className="rounded-xl border border-white/10 bg-[rgba(16,22,29,0.72)] p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div className="text-sm font-semibold text-white">Move list</div>
@@ -296,51 +477,7 @@ export function ReviewPage() {
                 </div>
               ) : (
                 <div className="text-sm italic text-[var(--muted)]">
-                  Make a move on the board to start exploring.
-                </div>
-              )}
-            </Card>
-
-            <Card className="rounded-xl border border-white/10 bg-[rgba(16,22,29,0.72)] p-6 text-[var(--muted)]">
-              <h2 className="text-xl font-semibold text-white mb-4">Position Statistics</h2>
-              {currentStats ? (
-                <div className="space-y-4">
-                  <div className="flex gap-6 text-sm">
-                    <div>Occurrences: <span className="text-white font-mono">{currentStats.occurrences}</span></div>
-                    <div>Win Rate: <span className="text-white font-mono">{Math.round((currentStats.wins / currentStats.occurrences) * 100)}%</span></div>
-                    <div>Draw Rate: <span className="text-white font-mono">{Math.round((currentStats.draws / currentStats.occurrences) * 100)}%</span></div>
-                  </div>
-                  
-                  {typeof currentStats.best_move === "string" && currentStats.best_move && (
-                    <div className="text-sm">
-                      Engine Best Move: <span className="text-[var(--accent)] font-semibold font-mono ml-2">{currentStats.best_move}</span>
-                    </div>
-                  )}
-
-                  <div>
-                    <h3 className="text-sm font-semibold text-white mb-2 border-b border-white/10 pb-1">Played Moves</h3>
-                    <ul className="space-y-1">
-                      {Object.entries(currentStats.played_moves)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([move, count]) => (
-                        <li key={move} className="text-sm">
-                          <button
-                            type="button"
-                            onClick={() => playMove(move)}
-                            className="flex w-full justify-between rounded bg-white/5 px-2 py-1 text-left transition hover:bg-white/10 hover:cursor-pointer"
-                            aria-label={`Play ${move}`}
-                          >
-                            <span className="font-mono text-white">{move}</span>
-                            <span>{count} times ({Math.round((count / currentStats.occurrences) * 100)}%)</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-sm italic text-white/50">
-                  No games reached this position.
+                  Make a move on the board, or pick a mistake above, to start exploring.
                 </div>
               )}
             </Card>

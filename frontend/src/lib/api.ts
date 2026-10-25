@@ -102,6 +102,66 @@ export async function fetchSimilarGames(gameHash: string) {
 
 export { API_URL };
 
+// Opening review report — mirrors backend/app/review/report.py.
+// All evaluations are from the reviewed player's point of view.
+
+export type ReviewScore = { cp: number | null; mate: number | null };
+
+export type ReviewClassification = "inaccuracy" | "mistake" | "blunder";
+
+export type ReviewPlayedMove = {
+  count: number;
+  // Scoring fields are only present on positions where the player is to move
+  evaluation?: ReviewScore;
+  loss_cp?: number;
+  win_chance_loss?: number;
+  classification?: ReviewClassification | null;
+};
+
+export type ReviewPosition = {
+  fen: string;
+  side_to_move: "white" | "black";
+  player_to_move: boolean;
+  occurrences: number;
+  wins: number;
+  draws: number;
+  line: string[];
+  best_move: string | null;
+  evaluation: (ReviewScore & { depth: number; source: string }) | null;
+  played_moves: Record<string, ReviewPlayedMove>;
+};
+
+export type ReviewMistake = {
+  fen: string;
+  line: string[];
+  move: string;
+  count: number;
+  best_move: string | null;
+  evaluation_before: ReviewScore;
+  evaluation_after: ReviewScore;
+  loss_cp: number;
+  win_chance_loss: number;
+  classification: ReviewClassification;
+  impact: number;
+};
+
+export type ReviewRepertoire = {
+  games: number;
+  counts: Record<ReviewClassification, number>;
+  positions: Record<string, ReviewPosition>;
+  mistakes: ReviewMistake[];
+};
+
+export type ReviewReport = {
+  summary: {
+    player: string;
+    games_included: number;
+    games_skipped: number;
+    max_plies: number;
+  };
+  repertoires: Record<"white" | "black", ReviewRepertoire>;
+};
+
 export async function submitReview(file: File, player: string) {
   const formData = new FormData();
   formData.append("pgn_file", file);
@@ -124,5 +184,5 @@ export async function fetchReviewStatus(jobId: string) {
 }
 
 export async function fetchReviewReports(jobId: string) {
-  return fetchJson<{ job_id: string; reports: Record<string, any>[] }>(`/api/v1/review/${jobId}/reports`);
+  return fetchJson<{ job_id: string; report: ReviewReport }>(`/api/v1/review/${jobId}/reports`);
 }

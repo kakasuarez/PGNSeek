@@ -7,7 +7,7 @@ export type ParsedMove = {
   ply: number;
 };
 
-function toMoveObject(uci: string) {
+export function toMoveObject(uci: string) {
   return {
     from: uci.slice(0, 2),
     to: uci.slice(2, 4),
@@ -46,4 +46,24 @@ export function parseUciMoves(pgnMoves?: string | null) {
 export function formatMoveNumber(ply: number) {
   const moveNumber = Math.ceil(ply / 2);
   return ply % 2 === 1 ? `${moveNumber}.` : `${moveNumber}...`;
+}
+
+export function uciToSan(fen: string, uci: string) {
+  try {
+    return new Chess(fen).move(toMoveObject(uci)).san;
+  } catch {
+    return uci;
+  }
+}
+
+// Formats an engine score: +0.4, -1.2, M3, -M2, or # when the move delivers checkmate
+export function formatEval(score: { cp: number | null; mate: number | null } | null | undefined) {
+  if (!score) return "";
+  if (score.mate !== null) {
+    if (score.mate === 0) return "#";
+    return score.mate > 0 ? `M${score.mate}` : `-M${-score.mate}`;
+  }
+  if (score.cp === null) return "";
+  const pawns = score.cp / 100;
+  return `${pawns > 0 ? "+" : ""}${pawns.toFixed(1)}`;
 }
