@@ -164,14 +164,14 @@ The ingestion pipeline groups back-to-back capture/recapture moves into an "exch
 
 **Workflow:**
 1. **Upload (`POST /api/v1/review`)**: Client uploads PGN file. API uploads file to Supabase Storage (`SUPABASE_BUCKET`), creates a `review_jobs` document with status `"queued"`, and dispatches `review_opening_task` to Celery via Redis broker.
-2. **Worker Processing (`app.tasks.review_opening_task`)**:
+2. **Worker Processing (`app.review.tasks.review_opening_task`)**:
    - Celery worker downloads PGN from Supabase to a temporary local file.
-   - Iterates through games matching target player up to `OPENING_REVIEW_MAX_PLIES` (default 20 plies).
-   - Groups unique positions by normalized FEN.
-   - Evaluates positions using `AnalysisChain`: checks `position_evals` collection cache first, falling back to `CloudAnalyzer` (Lichess API) or `LocalAnalyzer` (Stockfish binary).
-   - Identifies suboptimal moves where played move score loss exceeds optimal engine move score.
-3. **Report Generation**: Aggregates position frequency, engine evaluations, best moves, and played move score losses into job report objects stored in `review_jobs`.
-4. **Cleanup**: Temp files and Supabase storage objects are removed upon job completion or failure.
+   - `ReviewReportBuilder` (`app/review/report.py`) walks the first `OPENING_REVIEW_MAX_PLIES` (default 20) plies of every game where the target player is White or Black (exact name match; games with a custom `FEN` setup are skipped), building one position tree per colour keyed by normalized FEN. Each position records occurrences, wins, draws, the moves played from it, and the line from the start position of the first game that reached it.
+   - Each unique position where the player is to move is evaluated once, after all games are collected, using `AnalysisChain`: `position_evals` cache first, then `CloudAnalyzer` (Lichess cloud eval), then `LocalAnalyzer` (Stockfish).
+   - Each distinct move the player played is scored by evaluating the position **after** the move and negating it (rather than a `root_moves` search), so cloud evals and the per-FEN cache apply. Playing the engine's best move scores a loss of 0; checkmate and other terminal positions are scored without the engine.
+3. **Mistake detection**: Evaluations are converted to centipawns (mates via the Lichess conversion, `(21 - min(10, |mate|)) * 100`) and then to winning chances with the Lichess formula `2 / (1 + exp(-0.00368208 * cp)) - 1`, clamped to ±1000 cp. The drop in winning chances is classified with the Lichess thresholds: ≥ 0.3 blunder, ≥ 0.2 mistake, ≥ 0.1 inaccuracy. Losses under 30 cp (`MIN_CP_LOSS`) are never flagged, as they are within engine noise at review depths. Only the reviewed player's moves are scored.
+4. **Report Generation**: The job's `report` holds a summary plus, per colour, the position tree, mistake counts, and a `mistakes` list ranked by impact (`count × win_chance_loss`), so repeated mistakes rank above one-offs. The full shape is documented in `app/review/report.py`. The whole report is stored on the `review_jobs` document, so it is bounded by MongoDB's 16 MB document limit (roughly 8 KB per game at 20 plies).
+5. **Cleanup**: Temp files and Supabase storage objects are removed upon job completion or failure.
 
 ---
 

@@ -6,11 +6,11 @@ Opening review service.
 
 import chess
 import structlog
-from collections import Counter
-from typing import Any
+from typing import Any, Iterable
 from chess.pgn import Game
 from app.config import settings
-from app.review.schemas import AnalysisResult
+from app.review.schemas import AnalysisResult, AnalysisScore
+from app.review.report import ReviewReportBuilder, normalize_fen, score_move
 from app.review.analyzers.chain import AnalysisChain
 from app.review.analyzers.cloud import CloudAnalyzer
 from app.review.analyzers.local import LocalAnalyzer
@@ -22,7 +22,7 @@ log = structlog.get_logger()
 
 class AnalyzerService:
     """
-    Handles caching, calling the analyzer chain, logging.
+    Handles caching, calling the analyzer chain, logging, and building the review report.
     """
 
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -42,14 +42,10 @@ class AnalyzerService:
         """Stop the local Stockfish process, if one was started."""
         self.local_analyzer.close()
 
-    def _normalize_fen(self, board: chess.Board) -> str:
-        return " ".join(board.fen().split(" ")[:4])
-
     async def analyze(
         self, board: chess.Board
     ) -> AnalysisResult | None:
-        fen = self._normalize_fen(board)
-        # root_key = ",".join(move.uci() for move in root_moves or [])
+        fen = normalize_fen(board)
         cache_key = fen
         cached = await self.db.position_evals.find_one({"_id": cache_key})
         if cached:
@@ -79,72 +75,56 @@ class AnalyzerService:
             log.warning("review_analysis_no_result", fen=fen)
         return result
 
-    async def analyze_game(self, game: Game | None, player: str) -> dict[str, Any] | None:
-        if game is None:
-            log.warning("review_game_missing")
-            return None
-        white = game.headers.get("White", "?")
-        black = game.headers.get("Black", "?")
-        result = game.headers.get("Result", "*")
-        log.info("review_game_started", player=player, white=white, black=black, result=result)
-        player_color = None
-        if white == player:
-            player_color = chess.WHITE
-        if black == player:
-            player_color = chess.BLACK
-        if player_color is None:
-            log.info("review_game_skipped_player_not_found", player=player, white=white, black=black)
-            return None
+    async def review(self, games: Iterable[Game | None], player: str) -> dict[str, Any]:
+        """Build the opening review report for `player` from their games."""
+        builder = ReviewReportBuilder(player, self.max_plies)
+        for game in games:
+            if game is None:
+                continue
+            if not builder.add_game(game):
+                log.info(
+                    "review_game_skipped",
+                    player=player,
+                    white=game.headers.get("White", "?"),
+                    black=game.headers.get("Black", "?"),
+                )
 
-        buckets: dict[str, dict[str, Any]] = {}
-        board = game.board()
-        node = game
-        ply = 0
+        # Each unique position is evaluated once, after all games are collected
+        for position in builder.player_positions():
+            board = chess.Board(position["fen"])
+            best = await self.analyze(board)
+            if best is None:
+                log.error("review_analysis_failed", fen=position["fen"])
+                continue
+            builder.set_evaluation(position, best)
 
-        # For each FEN, store the different moves played by the player there and the best move.
-        # On the frontend we will allow setting up the board -> search by FEN, show different moves played, and win rate at each FEN
-        while node.variations and ply < self.max_plies:
-            next_node = node.variation(0)
-            move = next_node.move
+            for uci, played in position["played_moves"].items():
+                after_move = None
+                if uci != best.best_move_uci:
+                    after_move = await self._evaluate_after(board, chess.Move.from_uci(uci))
+                    if after_move is None:
+                        log.error("review_move_analysis_failed", fen=position["fen"], move=uci)
+                        continue
+                played.update(score_move(best.score, after_move))
 
-            fen = self._normalize_fen(board)
-            bucket = buckets.setdefault(
-                fen,
-                {
-                    "fen": fen,
-                    "side_to_move": "white" if board.turn == chess.WHITE else "black",
-                    "occurrences": 0,
-                    "wins": 0,
-                        "draws": 0,
-                    "played_moves": Counter(),
-                    "best_move": {}
-                },
-            )
-            bucket["occurrences"] += 1
-            if (result == "1-0" and player_color == chess.WHITE) or (result == "0-1" and player_color == chess.BLACK):
-                bucket["wins"] += 1
-            if result == "1/2-1/2":
-                bucket["draws"] += 1
-            bucket["played_moves"][move.uci()] = bucket["played_moves"].get(move.uci(), 0) + 1
-            if board.turn == player_color and bucket["best_move"] == {}:
-                best_move_analysis = await self.analyze(board=board)
-                if best_move_analysis is None:
-                    log.error("review_analysis_failed", fen=fen)
-                else:
-                    bucket["best_move"] = best_move_analysis.best_move_uci
-
-
-            board.push(move)
-            node = next_node
-            ply += 1
-
+        report = builder.finish()
         log.info(
-            "review_game_bucketed",
+            "review_report_built",
             player=player,
-            positions_seen=sum(bucket["occurrences"] for bucket in buckets.values()),
-            unique_positions=len(buckets),
+            games_included=builder.games_included,
+            games_skipped=builder.games_skipped,
+            counts={color: r["counts"] for color, r in report["repertoires"].items()},
+            analysis_counts=self.analysis_counts,
         )
-        return {
-            "color": "white" if player_color == chess.WHITE else "black",
-            "buckets": buckets
-        }
+        return report
+
+    async def _evaluate_after(self, board: chess.Board, move: chess.Move) -> AnalysisScore | None:
+        """Evaluate the position after `move`, from the opponent's (side to move's) point of view."""
+        after = board.copy(stack=False)
+        after.push(move)
+        if after.is_checkmate():
+            return AnalysisScore(mate=0)
+        if after.is_game_over():
+            return AnalysisScore(cp=0)
+        analysis = await self.analyze(after)
+        return analysis.score if analysis else None

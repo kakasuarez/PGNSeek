@@ -58,18 +58,11 @@ async def process_job(job: ReviewJob):
         
         service = AnalyzerService(db)
         
-        reports = []
-        for game in source.iter_games():
-            if game is None:
-                continue
-                
-            report = await service.analyze_game(game, player)
-            if report:
-                reports.append(report)
-                
+        report = await service.review(source.iter_games(), player)
+
         await db.review_jobs.update_one(
             {"_id": job_id},
-            {"$set": {"status": "completed", "reports": reports}}
+            {"$set": {"status": "completed", "report": report}}
         )
         log.info("task_review_opening_completed", job_id=job_id)
         

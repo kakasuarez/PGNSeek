@@ -59,11 +59,11 @@ async def review_reports(job_id: UUID, db: AsyncIOMotorDatabase = Depends(get_db
     if job.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Review job is not completed yet")
     
-    reports = job.get("reports")
-    if reports is None:
-        raise HTTPException(status_code=404, detail="Reports not found for this job")
-        
-    return {"job_id": job_id, "reports": reports}
+    report = job.get("report")
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found for this job")
+
+    return {"job_id": job_id, "report": report}
 
 
 @router.post(
@@ -71,8 +71,9 @@ async def review_reports(job_id: UUID, db: AsyncIOMotorDatabase = Depends(get_db
     summary="Run opening review on a PGN file",
     description=(
         "Analyze the first N plies of every game in the PGN, "
-        "deduplicate positions, evaluate with Stockfish, "
-        "and return a position report + mistake report."
+        "deduplicate positions, evaluate them with the Lichess cloud eval or Stockfish, "
+        "and build a position tree plus a ranked report of the player's mistakes. "
+        "Fetch the result from GET /review/{job_id}/reports once the job is completed."
     ),
 )
 @limiter.limit(f"{settings.REVIEW_RATE_LIMIT_PER_MINUTE}/minute")
